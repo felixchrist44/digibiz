@@ -1,11 +1,15 @@
 'use client';
 
-import React, { useActionState } from 'react';
+import React, { useState, useActionState, useEffect } from 'react';
 import { useFormStatus } from 'react-dom';
-import { login } from '@/app/auth/actions';
-import { Lock, Mail, Loader2, BarChart2 } from 'lucide-react';
+import { authenticate } from '@/app/auth/actions';
+import { Lock, Mail, Loader2, BarChart2, User } from 'lucide-react';
 
-function SubmitButton() {
+interface SubmitButtonProps {
+  isSignUp: boolean;
+}
+
+function SubmitButton({ isSignUp }: SubmitButtonProps) {
   const { pending } = useFormStatus();
 
   return (
@@ -17,17 +21,28 @@ function SubmitButton() {
       {pending ? (
         <>
           <Loader2 className="animate-spin -ml-1 mr-2 h-5 w-5 text-white" />
-          Masuk...
+          {isSignUp ? 'Mendaftar...' : 'Masuk...'}
         </>
       ) : (
-        'Masuk ke Dasbor'
+        isSignUp ? 'Daftar Akun Baru' : 'Masuk ke Dasbor'
       )}
     </button>
   );
 }
 
 export default function LoginPage() {
-  const [state, formAction] = useActionState(login, null);
+  const [isSignUp, setIsSignUp] = useState(false);
+  const [state, formAction] = useActionState(authenticate, null) as any;
+
+  // If registration is successful, automatically redirect/flip form to login mode
+  useEffect(() => {
+    if (state?.success) {
+      const timer = setTimeout(() => {
+        setIsSignUp(false);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [state]);
 
   return (
     <div className="min-h-screen flex flex-col justify-center items-center bg-radial from-slate-900 via-indigo-950 to-slate-950 p-4 font-sans select-none">
@@ -49,13 +64,38 @@ export default function LoginPage() {
           </p>
         </div>
 
-        {/* Login Form Container */}
+        {/* Login/Signup Form Container */}
         <div className="bg-slate-900/60 backdrop-blur-xl border border-slate-800/80 rounded-3xl p-8 shadow-2xl">
           <h2 className="text-xl font-bold text-white mb-6">
-            Selamat Datang Kembali
+            {isSignUp ? 'Daftar Akun Staff Baru' : 'Selamat Datang Kembali'}
           </h2>
 
           <form action={formAction} className="space-y-6">
+            {/* Hidden Input for Form Mode Router */}
+            <input type="hidden" name="actionType" value={isSignUp ? 'signup' : 'login'} />
+
+            {/* Full Name Input (Only on Sign Up Mode) */}
+            {isSignUp && (
+              <div className="animate-in fade-in duration-200">
+                <label htmlFor="fullName" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                  Nama Lengkap
+                </label>
+                <div className="relative rounded-xl shadow-sm">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <User className="h-5 w-5 text-slate-500" />
+                  </div>
+                  <input
+                    id="fullName"
+                    name="fullName"
+                    type="text"
+                    required={isSignUp}
+                    placeholder="Nama Anda..."
+                    className="block w-full pl-10 pr-4 py-3 bg-slate-950/40 border border-slate-800 rounded-xl text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all duration-150 text-sm"
+                  />
+                </div>
+              </div>
+            )}
+
             {/* Email Input */}
             <div>
               <label htmlFor="email" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
@@ -100,22 +140,39 @@ export default function LoginPage() {
               </div>
             </div>
 
-            {/* Error Message */}
+            {/* Server action error display */}
             {state?.error && (
-              <div className="p-4 bg-red-950/40 border border-red-900/50 rounded-xl text-sm text-red-400">
+              <div className="p-4 bg-red-950/40 border border-red-900/50 rounded-xl text-sm text-red-400 animate-in fade-in duration-200">
                 {state.error}
               </div>
             )}
 
+            {/* Server action success display (e.g. signup success redirect) */}
+            {state?.success && (
+              <div className="p-4 bg-emerald-950/40 border border-emerald-900/50 rounded-xl text-sm text-emerald-400 animate-in fade-in duration-200">
+                {state.success}
+              </div>
+            )}
+
             {/* Submit Button */}
-            <SubmitButton />
+            <SubmitButton isSignUp={isSignUp} />
           </form>
 
-          {/* Quick Info / Dev Bypass Details */}
-          <div className="mt-8 pt-6 border-t border-slate-800 text-center">
-            <p className="text-xs text-slate-500">
-              Butuh akses akun? Hubungi pemilik sistem untuk pendaftaran.
-            </p>
+          {/* Toggle Tab Button */}
+          <div className="mt-6 pt-6 border-t border-slate-800 text-center">
+            <button
+              onClick={() => {
+                setIsSignUp(!isSignUp);
+                if (state) {
+                  // Clean up actionState warnings or errors by reloading or simple state clear
+                  state.error = undefined;
+                  state.success = undefined;
+                }
+              }}
+              className="text-xs text-indigo-400 hover:text-indigo-350 hover:underline focus:outline-none transition-colors"
+            >
+              {isSignUp ? 'Sudah punya akun? Masuk di sini' : 'Belum punya akun? Daftar di sini'}
+            </button>
           </div>
         </div>
       </div>
