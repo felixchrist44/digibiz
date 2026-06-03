@@ -21,6 +21,7 @@ export interface Produk {
   deskripsi: string | null;
   harga: number;
   stok_saat_ini: number;
+  gambar_url: string | null;
   created_at: string;
 }
 

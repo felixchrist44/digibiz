@@ -13,9 +13,11 @@ import {
   Lock,
   Package,
   CheckCircle,
-  HelpCircle
+  Barcode as BarcodeIcon,
+  Upload
 } from 'lucide-react';
 import { Produk, Profile } from '@/types/database';
+import BarcodeGenerator from '@/components/BarcodeGenerator';
 
 interface Props {
   initialProducts: Produk[];
@@ -33,9 +35,16 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [currentProduct, setCurrentProduct] = useState<Produk | null>(null);
 
+  // Barcode modal state
+  const [isBarcodeOpen, setIsBarcodeOpen] = useState(false);
+  const [selectedBarcodeProduct, setSelectedBarcodeProduct] = useState<Produk | null>(null);
+
   // Form error/success alerts
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Live Image Preview state for forms
+  const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
 
   const isOwner = profile.role === 'owner';
 
@@ -52,6 +61,17 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
     if (filter === 'available') return p.stok_saat_ini > 5;
     return true;
   });
+
+  // Handle image file selection preview helper
+  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const url = URL.createObjectURL(file);
+      setImagePreviewUrl(url);
+    } else {
+      setImagePreviewUrl(null);
+    }
+  };
 
   // Handle Create Product
   const handleAddSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -74,6 +94,7 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
         setTimeout(() => {
           setIsAddOpen(false);
           setSuccessMessage(null);
+          setImagePreviewUrl(null);
         }, 1200);
       }
     });
@@ -100,6 +121,7 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
         setTimeout(() => {
           setIsEditOpen(false);
           setSuccessMessage(null);
+          setImagePreviewUrl(null);
         }, 1200);
       }
     });
@@ -140,6 +162,7 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
           onClick={() => {
             setErrorMessage(null);
             setSuccessMessage(null);
+            setImagePreviewUrl(null);
             setIsAddOpen(true);
           }}
           className="flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-650 hover:bg-indigo-750 text-white rounded-xl text-sm font-semibold transition-all duration-150 shadow-lg shadow-indigo-600/10 active:scale-[0.98]"
@@ -151,7 +174,7 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
 
       {/* Role Restriction Banner for Staff */}
       {!isOwner && (
-        <div className="flex items-center gap-3 p-4 bg-amber-500/10 border border-amber-550/20 rounded-2xl text-amber-400 text-xs shadow-inner">
+        <div className="flex items-center gap-3 p-4 bg-amber-500/10 border border-amber-555/20 rounded-2xl text-amber-400 text-xs shadow-inner">
           <Lock className="h-4 w-4 shrink-0 animate-pulse" />
           <span>
             <strong>Akses Staff Terbatas:</strong> Anda dapat mendaftarkan produk, namun hanya <strong>Owner</strong> yang berhak menentukan/mengubah harga jual dan menghapus produk dari database.
@@ -193,7 +216,7 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
         </div>
       </div>
 
-      {/* Products Grid */}
+      {/* Remodeled Product List: Wide, Compact Horizontal Rows */}
       {filteredProducts.length === 0 ? (
         <div className="py-20 text-center bg-slate-900/10 border border-dashed border-slate-850 rounded-2xl flex flex-col items-center">
           <Package className="h-12 w-12 text-slate-650 mb-3" />
@@ -203,7 +226,7 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="flex flex-col gap-4 w-full">
           {filteredProducts.map((p) => {
             const isLow = p.stok_saat_ini <= 5;
             const isOut = p.stok_saat_ini === 0;
@@ -211,48 +234,79 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
             return (
               <div
                 key={p.id}
-                className="bg-slate-900/40 backdrop-blur border border-slate-800/80 rounded-2xl p-6 hover:border-slate-700/60 shadow-xl transition-all duration-200 flex flex-col justify-between space-y-4"
+                className="bg-slate-900/40 backdrop-blur border border-slate-800/80 rounded-2xl p-4 hover:border-slate-700/60 shadow-xl transition-all duration-200 flex flex-col md:flex-row md:items-center justify-between gap-4 w-full"
               >
-                {/* Header info */}
-                <div className="space-y-1">
-                  <div className="flex items-start justify-between gap-2">
-                    <span className="text-[10px] font-mono font-bold bg-slate-800 text-slate-400 px-2 py-0.5 rounded-md border border-slate-750">
-                      {p.kode_produk}
-                    </span>
-                    {isLow && (
-                      <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                        isOut ? 'bg-red-500/10 text-red-400 border border-red-500/10' : 'bg-amber-500/10 text-amber-400 border border-amber-500/10'
-                      }`}>
-                        <AlertTriangle className="h-3 w-3" />
-                        {isOut ? 'Habis' : 'Stok Tipis'}
-                      </span>
+                {/* Left Side: Thumbnail & Title Metadata */}
+                <div className="flex items-center gap-4 flex-1 min-w-0">
+                  {/* Thumbnail Image from Supabase Storage */}
+                  <div className="h-14 w-14 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
+                    {p.gambar_url ? (
+                      <img
+                        src={p.gambar_url}
+                        alt={p.nama}
+                        className="h-full w-full object-cover"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <Package className="h-6 w-6 text-slate-550" />
                     )}
                   </div>
-                  <h3 className="text-base font-bold text-white tracking-tight pt-1 truncate">{p.nama}</h3>
-                  <p className="text-xs text-slate-450 line-clamp-2 min-h-[32px]">{p.deskripsi || 'Tidak ada deskripsi produk.'}</p>
+
+                  {/* Title details */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-[9px] font-mono font-bold bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded border border-slate-750">
+                        {p.kode_produk}
+                      </span>
+                      {isLow && (
+                        <span className={`inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+                          isOut ? 'bg-red-500/10 text-red-400 border border-red-500/10' : 'bg-amber-500/10 text-amber-400 border border-amber-500/10'
+                        }`}>
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          {isOut ? 'Habis' : 'Stok Tipis'}
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="text-base font-bold text-white tracking-tight mt-1.5 truncate">{p.nama}</h3>
+                    <p className="text-xs text-slate-450 line-clamp-1 mt-0.5">{p.deskripsi || 'Tidak ada deskripsi produk.'}</p>
+                  </div>
                 </div>
 
-                {/* Price and Stock Stats */}
-                <div className="pt-2 border-t border-slate-850 flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <span className="text-[10px] text-slate-450 font-semibold uppercase tracking-wider">Harga Jual</span>
+                {/* Middle Section: Price & Stock side by side */}
+                <div className="flex items-center gap-6 md:gap-12 shrink-0 border-t border-slate-850/50 pt-3 md:pt-0 md:border-0 justify-between md:justify-end">
+                  <div className="space-y-0.5 min-w-[100px]">
+                    <span className="text-[9px] text-slate-450 font-semibold uppercase tracking-wider block">Harga Jual</span>
                     <p className="text-sm font-extrabold text-indigo-400">{formatIDR(Number(p.harga))}</p>
                   </div>
-                  <div className="space-y-0.5 text-right">
-                    <span className="text-[10px] text-slate-450 font-semibold uppercase tracking-wider">Stok Saat Ini</span>
+                  <div className="space-y-0.5 text-right md:text-left min-w-[80px]">
+                    <span className="text-[9px] text-slate-450 font-semibold uppercase tracking-wider block">Stok Saat Ini</span>
                     <p className={`text-sm font-extrabold ${isOut ? 'text-red-400 font-black' : isLow ? 'text-amber-400 font-bold' : 'text-slate-200'}`}>
                       {p.stok_saat_ini} Pcs
                     </p>
                   </div>
                 </div>
 
-                {/* Card Actions */}
-                <div className="pt-4 border-t border-slate-850 flex items-center justify-end gap-2">
+                {/* Right Side: Printing, Editing & Deleting Actions */}
+                <div className="flex items-center justify-end gap-2 shrink-0 border-t border-slate-850/50 pt-3 md:pt-0 md:border-0">
+                  {/* Barcode Print trigger */}
+                  <button
+                    onClick={() => {
+                      setSelectedBarcodeProduct(p);
+                      setIsBarcodeOpen(true);
+                    }}
+                    className="p-2 rounded-lg bg-slate-950/40 border border-slate-800 hover:border-indigo-500/30 text-slate-400 hover:text-indigo-400 transition-colors"
+                    title="Cetak Barcode Label"
+                  >
+                    <BarcodeIcon className="h-4 w-4" />
+                  </button>
+
+                  {/* Edit */}
                   <button
                     onClick={() => {
                       setCurrentProduct(p);
                       setErrorMessage(null);
                       setSuccessMessage(null);
+                      setImagePreviewUrl(p.gambar_url);
                       setIsEditOpen(true);
                     }}
                     className="p-2 rounded-lg bg-slate-950/40 border border-slate-800 hover:border-indigo-500/30 text-slate-400 hover:text-indigo-400 transition-colors"
@@ -260,6 +314,8 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
                   >
                     <Edit2 className="h-4 w-4" />
                   </button>
+
+                  {/* Delete */}
                   {isOwner && (
                     <button
                       onClick={() => handleDelete(p.id)}
@@ -279,7 +335,7 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
       {/* ==================== ADD PRODUCT MODAL ==================== */}
       {isAddOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4">
-          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 shadow-2xl relative animate-in zoom-in-95 duration-150">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 shadow-2xl relative animate-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto">
             <button
               onClick={() => setIsAddOpen(false)}
               className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg"
@@ -290,10 +346,35 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
             <h2 className="text-xl font-bold text-white mb-2">Registrasi Produk Baru</h2>
             <p className="text-xs text-slate-400 mb-6">Masukkan data produk baru Anda secara detail ke sistem.</p>
 
-            <form onSubmit={handleAddSubmit} className="space-y-5">
+            <form onSubmit={handleAddSubmit} encType="multipart/form-data" className="space-y-5">
               {/* Form Status Messages */}
               {errorMessage && <div className="p-3 bg-red-950/40 border border-red-900/50 rounded-xl text-xs text-red-400">{errorMessage}</div>}
               {successMessage && <div className="p-3 bg-emerald-950/40 border border-emerald-900/50 rounded-xl text-xs text-emerald-400 flex items-center gap-2"><CheckCircle className="h-4 w-4 shrink-0" />{successMessage}</div>}
+
+              {/* Image upload selector & preview */}
+              <div className="space-y-3">
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Gambar Produk (Opsional)</label>
+                <div className="flex items-center gap-4">
+                  <div className="h-20 w-20 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
+                    {imagePreviewUrl ? (
+                      <img src={imagePreviewUrl} alt="Preview" className="h-full w-full object-cover" />
+                    ) : (
+                      <Package className="h-8 w-8 text-slate-700" />
+                    )}
+                  </div>
+                  <label className="flex flex-col items-center justify-center px-4 py-2 border border-slate-800 hover:border-slate-700 rounded-xl bg-slate-950/40 hover:bg-slate-950/80 cursor-pointer text-slate-350 hover:text-white transition-all text-xs font-semibold gap-1.5 active:scale-[0.98]">
+                    <Upload className="h-4 w-4 text-indigo-400" />
+                    Pilih File Gambar
+                    <input
+                      type="file"
+                      name="gambar"
+                      accept="image/*"
+                      onChange={handleImageChange}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              </div>
 
               <div className="grid grid-cols-2 gap-4">
                 {/* Product Code */}
@@ -400,7 +481,7 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
       {/* ==================== EDIT PRODUCT MODAL ==================== */}
       {isEditOpen && currentProduct && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4">
-          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 shadow-2xl relative animate-in zoom-in-95 duration-150">
+          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 shadow-2xl relative animate-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto">
             <button
               onClick={() => setIsEditOpen(false)}
               className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg"
@@ -411,10 +492,35 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
             <h2 className="text-xl font-bold text-white mb-2">Ubah Data Produk</h2>
             <p className="text-xs text-slate-400 mb-6">Ubah data untuk produk berkode <span className="font-mono text-indigo-400">{currentProduct.kode_produk}</span>.</p>
 
-            <form onSubmit={handleEditSubmit} className="space-y-5">
+            <form onSubmit={handleEditSubmit} encType="multipart/form-data" className="space-y-5">
               {/* Form Status Messages */}
               {errorMessage && <div className="p-3 bg-red-950/40 border border-red-900/50 rounded-xl text-xs text-red-400">{errorMessage}</div>}
               {successMessage && <div className="p-3 bg-emerald-950/40 border border-emerald-900/50 rounded-xl text-xs text-emerald-400 flex items-center gap-2"><CheckCircle className="h-4 w-4 shrink-0" />{successMessage}</div>}
+
+              {/* Image upload selector & preview */}
+              <div className="space-y-3">
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Gambar Produk</label>
+                <div className="flex items-center gap-4">
+                  <div className="h-20 w-20 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
+                    {imagePreviewUrl ? (
+                      <img src={imagePreviewUrl} alt="Preview" className="h-full w-full object-cover" />
+                    ) : (
+                      <Package className="h-8 w-8 text-slate-700" />
+                    )}
+                  </div>
+                  <label className="flex flex-col items-center justify-center px-4 py-2 border border-slate-800 hover:border-slate-700 rounded-xl bg-slate-950/40 hover:bg-slate-950/80 cursor-pointer text-slate-350 hover:text-white transition-all text-xs font-semibold gap-1.5 active:scale-[0.98]">
+                    <Upload className="h-4 w-4 text-indigo-400" />
+                    Pilih File Gambar Baru
+                    <input
+                      type="file"
+                      name="gambar"
+                      accept="image/*"
+                      onChange={handleImageChange}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+              </div>
 
               {/* Product Name */}
               <div>
@@ -489,6 +595,27 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== BARCODE GENERATOR MODAL ==================== */}
+      {isBarcodeOpen && selectedBarcodeProduct && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 print:bg-transparent print:backdrop-blur-none">
+          <div className="w-full max-w-sm bg-slate-900 border border-slate-850 rounded-3xl p-6 shadow-2xl relative animate-in zoom-in-95 duration-150 print:border-0 print:shadow-none print:p-0 print:bg-transparent">
+            {/* Close Button */}
+            <button
+              onClick={() => setIsBarcodeOpen(false)}
+              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg print:hidden z-30"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <BarcodeGenerator
+              value={selectedBarcodeProduct.kode_produk}
+              name={selectedBarcodeProduct.nama}
+              price={Number(selectedBarcodeProduct.harga)}
+            />
           </div>
         </div>
       )}

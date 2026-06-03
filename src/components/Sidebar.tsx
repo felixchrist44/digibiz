@@ -15,7 +15,8 @@ import {
   X,
   User,
   ShieldCheck,
-  Shield
+  Shield,
+  Barcode
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -34,6 +35,7 @@ export default function Sidebar({ user, children }: SidebarProps) {
   const menuItems = [
     { name: 'Ringkasan', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Daftar Produk', href: '/dashboard/produk', icon: Package },
+    { name: 'Pemindai Barcode', href: '/dashboard/scanner', icon: Barcode },
     { name: 'Transaksi Penjualan', href: '/dashboard/penjualan', icon: TrendingUp },
     { name: 'Riwayat Stok', href: '/dashboard/stok', icon: History },
     { name: 'Pengguna', href: '/dashboard/users', icon: Users },

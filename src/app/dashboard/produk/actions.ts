@@ -51,6 +51,39 @@ export async function createProduk(formData: FormData) {
     return { error: 'Kode produk dan nama produk wajib diisi.' };
   }
 
+  // Handle Image Upload
+  let gambar_url: string | null = null;
+  const imageFile = formData.get('gambar') as File | null;
+  if (imageFile && imageFile.size > 0 && imageFile.name) {
+    try {
+      const arrayBuffer = await imageFile.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      const fileExt = imageFile.name.split('.').pop();
+      const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
+      const filePath = `${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('product-images')
+        .upload(filePath, buffer, {
+          contentType: imageFile.type,
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (uploadError) {
+        return { error: `Gagal mengunggah gambar: ${uploadError.message}` };
+      }
+
+      const { data: urlData } = supabase.storage
+        .from('product-images')
+        .getPublicUrl(filePath);
+
+      gambar_url = urlData.publicUrl;
+    } catch (err: any) {
+      return { error: `Error upload gambar: ${err.message || err}` };
+    }
+  }
+
   // Insert product
   const { data: newProduct, error } = await supabase
     .from('produk')
@@ -59,7 +92,8 @@ export async function createProduk(formData: FormData) {
       nama,
       deskripsi: deskripsi || null,
       harga,
-      stok_saat_ini: stok_awal
+      stok_saat_ini: stok_awal,
+      gambar_url
     })
     .select()
     .single();
@@ -103,7 +137,7 @@ export async function updateProduk(id: string, formData: FormData) {
   // Get current product to verify price change
   const { data: currentProduct, error: fetchError } = await supabase
     .from('produk')
-    .select('harga')
+    .select('harga, gambar_url')
     .eq('id', id)
     .single();
 
@@ -122,6 +156,50 @@ export async function updateProduk(id: string, formData: FormData) {
       return { error: 'Hanya Owner yang dapat mengubah harga produk.' };
     }
     updateData.harga = inputHarga;
+  }
+
+  // Handle Image Upload if a new file was provided
+  const imageFile = formData.get('gambar') as File | null;
+  if (imageFile && imageFile.size > 0 && imageFile.name) {
+    try {
+      const arrayBuffer = await imageFile.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      const fileExt = imageFile.name.split('.').pop();
+      const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
+      const filePath = `${fileName}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('product-images')
+        .upload(filePath, buffer, {
+          contentType: imageFile.type,
+          cacheControl: '3600',
+          upsert: false
+        });
+
+      if (uploadError) {
+        return { error: `Gagal mengunggah gambar baru: ${uploadError.message}` };
+      }
+
+      const { data: urlData } = supabase.storage
+        .from('product-images')
+        .getPublicUrl(filePath);
+
+      updateData.gambar_url = urlData.publicUrl;
+
+      // Optional: Delete old image from storage if it exists to save space
+      if (currentProduct.gambar_url) {
+        try {
+          const oldPath = currentProduct.gambar_url.split('/').pop();
+          if (oldPath) {
+            await supabase.storage.from('product-images').remove([oldPath]);
+          }
+        } catch (e) {
+          console.error('Gagal menghapus gambar lama:', e);
+        }
+      }
+    } catch (err: any) {
+      return { error: `Error upload gambar baru: ${err.message || err}` };
+    }
   }
 
   const { error: updateError } = await supabase
