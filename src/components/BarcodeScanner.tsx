@@ -43,10 +43,7 @@ export default function BarcodeScanner({ onScanSuccess, isActive = true }: Barco
           { facingMode },
           {
             fps: 10,
-            qrbox: (width, height) => {
-              // Create a scanning square indicator (e.g. 260x150 for barcodes or square box)
-              return { width: Math.min(width * 0.8, 280), height: 160 };
-            },
+            qrbox: { width: 250, height: 150 },
             aspectRatio: 1.777778 // 16:9 aspect ratio for standard viewfinder
           },
           (decodedText) => {
