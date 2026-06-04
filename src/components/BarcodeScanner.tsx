@@ -7,39 +7,57 @@ import { Camera, RefreshCw, AlertCircle, Laptop } from 'lucide-react';
 interface BarcodeScannerProps {
   onScanSuccess: (decodedText: string) => void;
   isActive?: boolean;
+  onActiveChange?: (active: boolean) => void;
 }
 
-export default function BarcodeScanner({ onScanSuccess, isActive = true }: BarcodeScannerProps) {
+export default function BarcodeScanner({ 
+  onScanSuccess, 
+  isActive, 
+  onActiveChange 
+}: BarcodeScannerProps) {
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [hasCamera, setHasCamera] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const cooldownRef = useRef(false);
 
+  const [isCameraActive, setIsCameraActive] = useState(false);
+  const cameraRunning = isActive !== undefined ? isActive : isCameraActive;
+
   // Buffer for physical hardware USB scanner tracking
   const keyboardBufferRef = useRef<{ char: string; time: number }[]>([]);
 
   // 1. Camera Barcode Scanner Logic
   useEffect(() => {
-    if (!isActive) {
-      if (scannerRef.current && scannerRef.current.isScanning) {
-        scannerRef.current.stop().catch(console.error);
-      }
+    let isMounted = true;
+    let html5Qrcode: Html5Qrcode | null = null;
+    let startPromise: Promise<any> | null = null;
+
+    if (!cameraRunning) {
+      const stopCurrent = async () => {
+        try {
+          if (scannerRef.current && scannerRef.current.isScanning) {
+            await scannerRef.current.stop();
+          }
+        } catch (err) {
+          console.error('Error stopping scanner on deactivate:', err);
+        }
+      };
+      stopCurrent();
       return;
     }
 
     const scannerId = 'reader-viewfinder';
-    
-    // Initialize HTML5 QR Code instance
-    const html5Qrcode = new Html5Qrcode(scannerId);
-    scannerRef.current = html5Qrcode;
 
     const startScanner = async () => {
       try {
         setErrorMsg(null);
         
-        // Start scanning with selected facing mode
-        await html5Qrcode.start(
+        // Initialize HTML5 QR Code instance
+        html5Qrcode = new Html5Qrcode(scannerId);
+        scannerRef.current = html5Qrcode;
+
+        startPromise = html5Qrcode.start(
           { facingMode },
           {
             fps: 10,
@@ -47,6 +65,7 @@ export default function BarcodeScanner({ onScanSuccess, isActive = true }: Barco
             aspectRatio: 1.777778 // 16:9 aspect ratio for standard viewfinder
           },
           (decodedText) => {
+            if (!isMounted) return;
             // Successful scan
             if (cooldownRef.current) return;
             cooldownRef.current = true;
@@ -63,26 +82,58 @@ export default function BarcodeScanner({ onScanSuccess, isActive = true }: Barco
             // Scanning failure is triggered on every frame check, ignore it to keep logs clean
           }
         );
+
+        await startPromise;
+
+        if (!isMounted) {
+          if (html5Qrcode.isScanning) {
+            await html5Qrcode.stop();
+          }
+          return;
+        }
+
         setHasCamera(true);
       } catch (err: any) {
-        console.error('Gagal memulai kamera:', err);
-        setHasCamera(false);
-        setErrorMsg(err.message || 'Gagal mengakses kamera. Pastikan izin kamera telah diberikan.');
+        if (isMounted) {
+          console.error('Gagal memulai kamera:', err);
+          setHasCamera(false);
+          setErrorMsg(err.message || 'Gagal mengakses kamera. Pastikan izin kamera telah diberikan.');
+        }
       }
     };
 
     // Slight delay to ensure DOM is fully rendered
     const timer = setTimeout(() => {
-      startScanner();
+      if (isMounted) {
+        startScanner();
+      }
     }, 100);
 
     return () => {
+      isMounted = false;
       clearTimeout(timer);
-      if (html5Qrcode.isScanning) {
-        html5Qrcode.stop().catch(err => console.log('Cleanup stop error:', err));
-      }
+      
+      const stopScanner = async () => {
+        if (startPromise) {
+          try {
+            await startPromise;
+          } catch (e) {
+            // Ignore start errors during cleanup
+          }
+        }
+        try {
+          if (html5Qrcode && html5Qrcode.isScanning) {
+            await html5Qrcode.stop();
+          } else if (scannerRef.current && scannerRef.current.isScanning) {
+            await scannerRef.current.stop();
+          }
+        } catch (err) {
+          console.log('Cleanup stop error:', err);
+        }
+      };
+      stopScanner();
     };
-  }, [facingMode, isActive, onScanSuccess]);
+  }, [facingMode, cameraRunning, onScanSuccess]);
 
   // 2. Global Hardware Laser Barcode Scanner Listener
   useEffect(() => {
@@ -148,21 +199,37 @@ export default function BarcodeScanner({ onScanSuccess, isActive = true }: Barco
           <Camera className="h-4 w-4 text-indigo-400" />
           Kamera Pemindai Barcode
         </h4>
-        {hasCamera && isActive && (
-          <button
-            onClick={toggleCamera}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-950/60 border border-slate-800 hover:border-slate-700 text-slate-350 hover:text-white rounded-xl text-xs font-semibold transition-all active:scale-[0.98]"
-            title="Ganti Kamera Depan/Belakang"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Switch Kamera
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {hasCamera && cameraRunning && (
+            <button
+              onClick={toggleCamera}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-950/60 border border-slate-800 hover:border-slate-700 text-slate-350 hover:text-white rounded-xl text-xs font-semibold transition-all active:scale-[0.98]"
+              title="Ganti Kamera Depan/Belakang"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Switch Kamera
+            </button>
+          )}
+          {cameraRunning && (
+            <button
+              onClick={() => {
+                if (onActiveChange) {
+                  onActiveChange(false);
+                } else {
+                  setIsCameraActive(false);
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-950/40 border border-red-900/40 hover:border-red-800 text-red-400 hover:text-red-300 rounded-xl text-xs font-semibold transition-all active:scale-[0.98]"
+            >
+              Matikan
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Camera Viewfinder Overlay area */}
       <div className="relative w-full aspect-[4/3] bg-slate-950 rounded-2xl overflow-hidden border border-slate-800 flex flex-col items-center justify-center">
-        {isActive ? (
+        {cameraRunning ? (
           <>
             <div id="reader-viewfinder" className="w-full h-full" />
             
@@ -184,14 +251,33 @@ export default function BarcodeScanner({ onScanSuccess, isActive = true }: Barco
             )}
           </>
         ) : (
-          <div className="text-center p-6 text-slate-500 space-y-1">
-            <Camera className="h-8 w-8 text-slate-750 mx-auto" />
-            <p className="text-xs font-semibold">Pemindai Kamera Dinonaktifkan</p>
+          <div className="flex flex-col items-center justify-center p-6 text-center space-y-4 w-full h-full bg-slate-950/50">
+            <div className="h-12 w-12 rounded-2xl bg-slate-900/80 flex items-center justify-center border border-slate-800 text-indigo-400 shadow-inner animate-pulse">
+              <Camera className="h-6 w-6" />
+            </div>
+            <div className="space-y-1">
+              <p className="text-xs font-bold text-slate-350">Kamera Pemindai Nonaktif</p>
+              <p className="text-[10px] text-slate-500 max-w-[200px] leading-relaxed mx-auto">
+                Aktifkan kamera perangkat Anda untuk mulai memindai barcode menggunakan kamera.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                if (onActiveChange) {
+                  onActiveChange(true);
+                } else {
+                  setIsCameraActive(true);
+                }
+              }}
+              className="px-4 py-2 bg-indigo-650 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl transition-all shadow-md active:scale-[0.98]"
+            >
+              Aktifkan Kamera Pemindai
+            </button>
           </div>
         )}
 
         {/* Viewfinder Error fallback banner */}
-        {errorMsg && isActive && (
+        {errorMsg && cameraRunning && (
           <div className="absolute inset-0 bg-slate-950 p-6 flex flex-col items-center justify-center text-center space-y-3 z-10">
             <AlertCircle className="h-8 w-8 text-red-400" />
             <p className="text-xs text-slate-400 max-w-[240px]">{errorMsg}</p>

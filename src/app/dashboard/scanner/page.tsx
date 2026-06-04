@@ -121,10 +121,7 @@ export default function ScannerPage() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         {/* Left Column: Camera Viewport (col-span-5) */}
         <div className="lg:col-span-5 space-y-4">
-          <div className="bg-slate-900/40 border border-slate-800 rounded-3xl p-4 shadow-xl">
-            <h3 className="text-sm font-bold text-white mb-3 px-1">Sensor Input Scanner</h3>
-            <BarcodeScanner onScanSuccess={handleBarcodeLookup} />
-          </div>
+          <BarcodeScanner onScanSuccess={handleBarcodeLookup} />
 
           {/* Manual Input Fallback */}
           <div className="bg-slate-900/40 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
