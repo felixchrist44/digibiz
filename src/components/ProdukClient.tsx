@@ -158,18 +158,20 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
           <h1 className="text-2xl font-bold tracking-tight text-white">Daftar Inventaris Produk</h1>
           <p className="text-xs text-slate-400 mt-1">Kelola dan pantau seluruh produk beserta harga jual barang.</p>
         </div>
-        <button
-          onClick={() => {
-            setErrorMessage(null);
-            setSuccessMessage(null);
-            setImagePreviewUrl(null);
-            setIsAddOpen(true);
-          }}
-          className="flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-650 hover:bg-indigo-750 text-white rounded-xl text-sm font-semibold transition-all duration-150 shadow-lg shadow-indigo-600/10 active:scale-[0.98]"
-        >
-          <Plus className="h-4 w-4" />
-          Registrasi Produk Baru
-        </button>
+        {isOwner && (
+          <button
+            onClick={() => {
+              setErrorMessage(null);
+              setSuccessMessage(null);
+              setImagePreviewUrl(null);
+              setIsAddOpen(true);
+            }}
+            className="flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-650 hover:bg-indigo-750 text-white rounded-xl text-sm font-semibold transition-all duration-150 shadow-lg shadow-indigo-600/10 active:scale-[0.98]"
+          >
+            <Plus className="h-4 w-4" />
+            Registrasi Produk Baru
+          </button>
+        )}
       </div>
 
       {/* Role Restriction Banner for Staff */}
@@ -177,7 +179,7 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
         <div className="flex items-center gap-3 p-4 bg-amber-500/10 border border-amber-555/20 rounded-2xl text-amber-400 text-xs shadow-inner">
           <Lock className="h-4 w-4 shrink-0 animate-pulse" />
           <span>
-            <strong>Akses Staff Terbatas:</strong> Anda dapat mendaftarkan produk, namun hanya <strong>Owner</strong> yang berhak menentukan/mengubah harga jual dan menghapus produk dari database.
+            <strong>Akses Staff Terbatas:</strong> Hanya <strong>Owner</strong> yang berhak mendaftarkan produk baru, menentukan/mengubah harga, dan menghapus produk dari database.
           </span>
         </div>
       )}
@@ -274,6 +276,12 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
 
                 {/* Middle Section: Price & Stock side by side */}
                 <div className="flex items-center gap-6 md:gap-12 shrink-0 border-t border-slate-850/50 pt-3 md:pt-0 md:border-0 justify-between md:justify-end">
+                  {isOwner && (
+                    <div className="space-y-0.5 min-w-[100px]">
+                      <span className="text-[9px] text-slate-450 font-semibold uppercase tracking-wider block">Harga Modal</span>
+                      <p className="text-sm font-extrabold text-emerald-400">{formatIDR(Number(p.harga_modal || 0))}</p>
+                    </div>
+                  )}
                   <div className="space-y-0.5 min-w-[100px]">
                     <span className="text-[9px] text-slate-450 font-semibold uppercase tracking-wider block">Harga Jual</span>
                     <p className="text-sm font-extrabold text-indigo-400">{formatIDR(Number(p.harga))}</p>
@@ -414,35 +422,39 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
                 />
               </div>
 
-              {/* Price input (Locked to 0 if not Owner) */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Harga Jual (IDR)</label>
-                  {!isOwner && (
-                    <span className="text-[10px] text-amber-400 flex items-center gap-1 font-medium">
-                      <Lock className="h-3 w-3" /> Locked
-                    </span>
-                  )}
+              {/* Prices grid (Harga Modal & Harga Jual) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Harga Modal */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Harga Modal (IDR)</label>
+                  <div className="relative rounded-xl">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500">Rp</span>
+                    <input
+                      type="number"
+                      name="harga_modal"
+                      min="0"
+                      defaultValue="0"
+                      placeholder="Contoh: 10000"
+                      className="w-full pl-9 pr-3 py-2.5 bg-slate-950/40 border border-slate-800 text-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
                 </div>
-                <div className="relative rounded-xl">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500">Rp</span>
-                  <input
-                    type="number"
-                    name="harga"
-                    min="0"
-                    defaultValue="0"
-                    disabled={!isOwner}
-                    placeholder="Contoh: 15000"
-                    className={`w-full pl-9 pr-3 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                      isOwner
-                        ? 'bg-slate-950/40 border-slate-800 text-slate-200'
-                        : 'bg-slate-950/20 border-slate-850 text-slate-500 cursor-not-allowed'
-                    }`}
-                  />
+
+                {/* Harga Jual */}
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Harga Jual (IDR)</label>
+                  <div className="relative rounded-xl">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500">Rp</span>
+                    <input
+                      type="number"
+                      name="harga"
+                      min="0"
+                      defaultValue="0"
+                      placeholder="Contoh: 15000"
+                      className="w-full pl-9 pr-3 py-2.5 bg-slate-950/40 border border-slate-800 text-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
                 </div>
-                {!isOwner && (
-                  <p className="text-[10px] text-slate-500 mt-1">Hanya Owner yang dapat menetapkan harga produk. Produk akan terbuat dengan harga Rp0.</p>
-                )}
               </div>
 
               {/* Description */}
@@ -535,34 +547,54 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
                 />
               </div>
 
-              {/* Price input (Locked to read-only if not Owner) */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Harga Jual (IDR)</label>
+              {/* Prices grid (Harga Modal & Harga Jual) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Harga Modal - Only shown and editable by Owner */}
+                {isOwner && (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Harga Modal (IDR)</label>
+                    <div className="relative rounded-xl">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500">Rp</span>
+                      <input
+                        type="number"
+                        name="harga_modal"
+                        min="0"
+                        defaultValue={Number(currentProduct.harga_modal || 0)}
+                        className="w-full pl-9 pr-3 py-2.5 bg-slate-950/40 border border-slate-800 text-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Harga Jual */}
+                <div className={isOwner ? '' : 'sm:col-span-2'}>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Harga Jual (IDR)</label>
+                    {!isOwner && (
+                      <span className="text-[10px] text-amber-400 flex items-center gap-1 font-medium bg-amber-500/5 px-2 py-0.5 rounded border border-amber-500/10">
+                        <Lock className="h-3 w-3" /> Hanya Owner
+                      </span>
+                    )}
+                  </div>
+                  <div className="relative rounded-xl">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500">Rp</span>
+                    <input
+                      type="number"
+                      name="harga"
+                      min="0"
+                      defaultValue={Number(currentProduct.harga)}
+                      disabled={!isOwner}
+                      className={`w-full pl-9 pr-3 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
+                        isOwner
+                          ? 'bg-slate-950/40 border-slate-800 text-slate-200'
+                          : 'bg-slate-950/20 border-slate-850 text-slate-500 cursor-not-allowed'
+                      }`}
+                    />
+                  </div>
                   {!isOwner && (
-                    <span className="text-[10px] text-amber-400 flex items-center gap-1 font-medium bg-amber-500/5 px-2 py-0.5 rounded border border-amber-500/10">
-                      <Lock className="h-3 w-3" /> Hanya Owner
-                    </span>
+                    <p className="text-[10px] text-slate-500 mt-1">Akses Terbatas: Sebagai Staff, Anda tidak dapat mengubah harga barang. Hubungi Owner.</p>
                   )}
                 </div>
-                <div className="relative rounded-xl">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500">Rp</span>
-                  <input
-                    type="number"
-                    name="harga"
-                    min="0"
-                    defaultValue={Number(currentProduct.harga)}
-                    disabled={!isOwner}
-                    className={`w-full pl-9 pr-3 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                      isOwner
-                        ? 'bg-slate-950/40 border-slate-800 text-slate-200'
-                        : 'bg-slate-950/20 border-slate-850 text-slate-500 cursor-not-allowed'
-                    }`}
-                  />
-                </div>
-                {!isOwner && (
-                  <p className="text-[10px] text-slate-500 mt-1">Akses Terbatas: Sebagai Staff, Anda tidak dapat mengubah harga barang. Hubungi Owner.</p>
-                )}
               </div>
 
               {/* Description */}

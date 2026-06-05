@@ -20,6 +20,7 @@ export interface Produk {
   nama: string;
   deskripsi: string | null;
   harga: number;
+  harga_modal?: number | null;
   stok_saat_ini: number;
   gambar_url: string | null;
   created_at: string;

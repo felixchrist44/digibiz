@@ -36,16 +36,16 @@ export async function createProduk(formData: FormData) {
   const profile = await getUserProfile();
   if (!profile) return { error: 'Sesi kedaluwarsa. Silakan masuk kembali.' };
 
+  if (profile.role !== 'owner') {
+    return { error: 'Hanya Owner yang berhak menambahkan produk baru.' };
+  }
+
   const kode_produk = formData.get('kode_produk') as string;
   const nama = formData.get('nama') as string;
   const deskripsi = formData.get('deskripsi') as string;
   const stok_awal = Number(formData.get('stok_awal') || 0);
-  
-  // Enforce price change protection: staff can create but price is set to 0 or staff cannot change
-  let harga = Number(formData.get('harga') || 0);
-  if (profile.role !== 'owner') {
-    harga = 0; // staff can only add with 0 price, owner must set it
-  }
+  const harga = Number(formData.get('harga') || 0);
+  const harga_modal = Number(formData.get('harga_modal') || 0);
 
   if (!kode_produk || !nama) {
     return { error: 'Kode produk dan nama produk wajib diisi.' };
@@ -92,6 +92,7 @@ export async function createProduk(formData: FormData) {
       nama,
       deskripsi: deskripsi || null,
       harga,
+      harga_modal,
       stok_saat_ini: stok_awal,
       gambar_url
     })
@@ -129,6 +130,7 @@ export async function updateProduk(id: string, formData: FormData) {
   const nama = formData.get('nama') as string;
   const deskripsi = formData.get('deskripsi') as string;
   const inputHarga = Number(formData.get('harga') || 0);
+  const inputHargaModal = formData.get('harga_modal') !== null ? Number(formData.get('harga_modal') || 0) : null;
 
   if (!nama) {
     return { error: 'Nama produk wajib diisi.' };
@@ -137,7 +139,7 @@ export async function updateProduk(id: string, formData: FormData) {
   // Get current product to verify price change
   const { data: currentProduct, error: fetchError } = await supabase
     .from('produk')
-    .select('harga, gambar_url')
+    .select('harga, harga_modal, gambar_url')
     .eq('id', id)
     .single();
 
@@ -156,6 +158,14 @@ export async function updateProduk(id: string, formData: FormData) {
       return { error: 'Hanya Owner yang dapat mengubah harga produk.' };
     }
     updateData.harga = inputHarga;
+  }
+
+  // Enforce cost price change protection
+  if (inputHargaModal !== null && Number(currentProduct.harga_modal || 0) !== inputHargaModal) {
+    if (profile.role !== 'owner') {
+      return { error: 'Hanya Owner yang dapat mengubah harga modal produk.' };
+    }
+    updateData.harga_modal = inputHargaModal;
   }
 
   // Handle Image Upload if a new file was provided

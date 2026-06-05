@@ -15,6 +15,23 @@ import { Produk, Penjualan } from '@/types/database';
 export default async function DashboardPage() {
   const supabase = await createClient();
 
+  // Retrieve user
+  const { data: { user } } = await supabase.auth.getUser();
+
+  // Fetch active user profile to check role
+  let role: 'owner' | 'staff' = 'staff';
+  if (user) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+    if (profile) {
+      role = profile.role as 'owner' | 'staff';
+    }
+  }
+  const isOwner = role === 'owner';
+
   // Fetch all products
   const { data: produkList } = await supabase
     .from('produk')
@@ -62,13 +79,15 @@ export default async function DashboardPage() {
           <p className="text-slate-400 mt-1">Pantau performa penjualan dan stok barang Anda secara real-time.</p>
         </div>
         <div className="flex gap-3">
-          <Link
-            href="/dashboard/produk"
-            className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-sm font-semibold hover:bg-slate-850 hover:text-white transition-all duration-150"
-          >
-            <Plus className="h-4 w-4" />
-            Tambah Produk
-          </Link>
+          {isOwner && (
+            <Link
+              href="/dashboard/produk"
+              className="flex items-center gap-2 px-4 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-sm font-semibold hover:bg-slate-850 hover:text-white transition-all duration-150"
+            >
+              <Plus className="h-4 w-4" />
+              Tambah Produk
+            </Link>
+          )}
           <Link
             href="/dashboard/penjualan"
             className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 rounded-xl text-sm font-semibold text-white transition-all duration-150 shadow-lg shadow-indigo-600/10 active:scale-[0.98]"

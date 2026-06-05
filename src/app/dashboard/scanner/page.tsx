@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useTransition } from 'react';
+import React, { useState, useTransition, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import { createClient } from '@/utils/supabase/client';
 import { adjustStok } from '@/app/dashboard/stok/actions';
@@ -34,6 +34,25 @@ export default function ScannerPage() {
   // Stock mutation feedback messages
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // User role state to restrict registration access
+  const [isOwner, setIsOwner] = useState(false);
+
+  useEffect(() => {
+    const fetchRole = async () => {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', user.id)
+          .single();
+        setIsOwner(profile?.role === 'owner');
+      }
+    };
+    fetchRole();
+  }, []);
 
   // Search product by barcode/SKU
   const handleBarcodeLookup = async (code: string) => {
@@ -179,13 +198,15 @@ export default function ScannerPage() {
                     <h3 className="text-sm font-bold text-slate-350">Barang Tidak Ditemukan</h3>
                     <p className="text-xs text-slate-500 mt-1">{searchError}</p>
                   </div>
-                  <a
-                    href="/dashboard/produk"
-                    className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 hover:text-indigo-300 rounded-xl text-xs font-bold transition-all"
-                  >
-                    <Plus className="h-4 w-4" />
-                    Registrasikan SKU `{scannedText}` Baru
-                  </a>
+                  {isOwner && (
+                    <a
+                      href="/dashboard/produk"
+                      className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 hover:text-indigo-300 rounded-xl text-xs font-bold transition-all"
+                    >
+                      <Plus className="h-4 w-4" />
+                      Registrasikan SKU `{scannedText}` Baru
+                    </a>
+                  )}
                 </div>
               ) : product ? (
                 /* Product detail layout with image thumbnail, description, price, stock */

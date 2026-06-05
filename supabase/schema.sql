@@ -45,6 +45,7 @@ create table if not exists public.produk (
   nama text not null,
   deskripsi text,
   harga numeric(12,2) not null check (harga >= 0),
+  harga_modal numeric(12,2) check (harga_modal >= 0),
   stok_saat_ini integer not null default 0 check (stok_saat_ini >= 0),
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
@@ -156,3 +157,6 @@ create policy "Allow authenticated users to update product images" on storage.ob
 
 drop policy if exists "Allow authenticated users to delete product images" on storage.objects;
 create policy "Allow authenticated users to delete product images" on storage.objects for delete to authenticated using (bucket_id = 'product-images');
+
+-- 8. Add harga_modal to produk table (for existing databases)
+alter table public.produk add column if not exists harga_modal numeric(12,2) check (harga_modal >= 0);
