@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { logout } from '@/app/auth/actions';
 import {
   LayoutDashboard,
@@ -16,7 +16,9 @@ import {
   User,
   ShieldCheck,
   Shield,
-  Barcode
+  Barcode,
+  ShoppingCart,
+  Camera
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -31,11 +33,85 @@ interface SidebarProps {
 export default function Sidebar({ user, children }: SidebarProps) {
   const [isOpen, setIsOpen] = useState(false);
   const pathname = usePathname();
+  const router = useRouter();
+
+  // Global scanner buffering & redirection to checkout
+  const keyBufferRef = useRef<{ char: string; time: number }[]>([]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // If the user is already on checkout, delegate the scanning logic directly to CheckoutSubSection
+      if (pathname === '/dashboard/checkout') {
+        return;
+      }
+
+      const activeEl = document.activeElement;
+      const isInputFocused = activeEl && (
+        activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        (activeEl as HTMLElement).isContentEditable
+      );
+
+      if (e.key === 'Enter') {
+        const now = performance.now();
+        const buffer = keyBufferRef.current;
+        
+        if (buffer.length > 0) {
+          // Check inter-character timings (<30ms)
+          let isScanner = true;
+          for (let i = 1; i < buffer.length; i++) {
+            if (buffer[i].time - buffer[i - 1].time > 30) {
+              isScanner = false;
+              break;
+            }
+          }
+
+          // Ensure Enter also arrived within 30ms of last char
+          if (now - buffer[buffer.length - 1].time > 30) {
+            isScanner = false;
+          }
+
+          // If verified as hardware barcode scanner scan, redirect automatically
+          if (isScanner && buffer.length >= 3) {
+            e.preventDefault();
+            const sku = buffer.map(b => b.char).join('');
+            
+            // Clean up any focused text fields to prevent garbage values
+            if (isInputFocused && activeEl) {
+              (activeEl as HTMLInputElement).value = '';
+              (activeEl as HTMLInputElement).blur();
+            }
+
+            // Redirect automatically to the checkout view with query parameter
+            router.push(`/dashboard/checkout?scan=${encodeURIComponent(sku)}`);
+          }
+        }
+        keyBufferRef.current = [];
+      } else if (e.key.length === 1) {
+        const now = performance.now();
+        
+        // Idle delay check (>30ms) to reset manual keyboard typing buffer
+        if (keyBufferRef.current.length > 0) {
+          const lastTime = keyBufferRef.current[keyBufferRef.current.length - 1].time;
+          if (now - lastTime > 30) {
+            keyBufferRef.current = [];
+          }
+        }
+        keyBufferRef.current.push({ char: e.key, time: now });
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [pathname, router]);
 
   const menuItems = [
     { name: 'Ringkasan', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Daftar Produk', href: '/dashboard/produk', icon: Package },
-    { name: 'Pemindai Barcode', href: '/dashboard/scanner', icon: Barcode },
+    { name: 'Checkout Kasir', href: '/dashboard/checkout', icon: ShoppingCart },
+    { name: 'Pemindai Mobile', href: '/dashboard/scanner', icon: Camera },
     { name: 'Transaksi Penjualan', href: '/dashboard/penjualan', icon: TrendingUp },
     { name: 'Riwayat Stok', href: '/dashboard/stok', icon: History },
     { name: 'Pengguna', href: '/dashboard/users', icon: Users },

@@ -56,15 +56,13 @@ export async function createProduk(formData: FormData) {
   const imageFile = formData.get('gambar') as File | null;
   if (imageFile && imageFile.size > 0 && imageFile.name) {
     try {
-      const arrayBuffer = await imageFile.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
       const fileExt = imageFile.name.split('.').pop();
       const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
       const filePath = `${fileName}`;
 
       const { error: uploadError } = await supabase.storage
         .from('product-images')
-        .upload(filePath, buffer, {
+        .upload(filePath, imageFile, {
           contentType: imageFile.type,
           cacheControl: '3600',
           upsert: false
@@ -124,8 +122,21 @@ export async function createProduk(formData: FormData) {
 
 export async function updateProduk(id: string, formData: FormData) {
   const supabase = await createClient();
-  const profile = await getUserProfile();
+
+  // Execute user profile and product details retrieval in parallel to avoid waterfalls
+  const [profile, { data: currentProduct, error: fetchError }] = await Promise.all([
+    getUserProfile(),
+    supabase
+      .from('produk')
+      .select('harga, harga_modal, gambar_url')
+      .eq('id', id)
+      .single()
+  ]);
+
   if (!profile) return { error: 'Sesi kedaluwarsa.' };
+  if (fetchError || !currentProduct) {
+    return { error: 'Produk tidak ditemukan.' };
+  }
 
   const nama = formData.get('nama') as string;
   const deskripsi = formData.get('deskripsi') as string;
@@ -134,17 +145,6 @@ export async function updateProduk(id: string, formData: FormData) {
 
   if (!nama) {
     return { error: 'Nama produk wajib diisi.' };
-  }
-
-  // Get current product to verify price change
-  const { data: currentProduct, error: fetchError } = await supabase
-    .from('produk')
-    .select('harga, harga_modal, gambar_url')
-    .eq('id', id)
-    .single();
-
-  if (fetchError || !currentProduct) {
-    return { error: 'Produk tidak ditemukan.' };
   }
 
   const updateData: any = {
@@ -168,19 +168,17 @@ export async function updateProduk(id: string, formData: FormData) {
     updateData.harga_modal = inputHargaModal;
   }
 
-  // Handle Image Upload if a new file was provided
+  // Handle Image Upload if a new file was provided, avoiding Buffer overhead by uploading the File object directly
   const imageFile = formData.get('gambar') as File | null;
   if (imageFile && imageFile.size > 0 && imageFile.name) {
     try {
-      const arrayBuffer = await imageFile.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
       const fileExt = imageFile.name.split('.').pop();
       const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
       const filePath = `${fileName}`;
 
       const { error: uploadError } = await supabase.storage
         .from('product-images')
-        .upload(filePath, buffer, {
+        .upload(filePath, imageFile, {
           contentType: imageFile.type,
           cacheControl: '3600',
           upsert: false

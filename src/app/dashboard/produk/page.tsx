@@ -13,12 +13,21 @@ export default async function ProdukPage() {
     redirect('/login');
   }
 
-  // Fetch user profile
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .single();
+  // Fetch user profile and products in parallel
+  const [profileResult, productsResult] = await Promise.all([
+    supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single(),
+    supabase
+      .from('produk')
+      .select('*')
+      .order('created_at', { ascending: false })
+  ]);
+
+  const profile = profileResult.data;
+  const products = productsResult.data;
 
   // Fallback profile if not found in db yet
   const activeProfile: Profile = profile || {
@@ -27,12 +36,6 @@ export default async function ProdukPage() {
     role: 'staff',
     created_at: new Date().toISOString(),
   };
-
-  // Fetch products
-  const { data: products } = await supabase
-    .from('produk')
-    .select('*')
-    .order('created_at', { ascending: false });
 
   return (
     <ProdukClient

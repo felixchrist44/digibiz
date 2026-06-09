@@ -18,34 +18,23 @@ export default async function DashboardPage() {
   // Retrieve user
   const { data: { user } } = await supabase.auth.getUser();
 
-  // Fetch active user profile to check role
+  // Fetch user profile role, products, and sales in parallel to avoid database query waterfalls
+  const [profileResult, produkResult, penjualanResult] = await Promise.all([
+    user
+      ? supabase.from('profiles').select('role').eq('id', user.id).single()
+      : Promise.resolve({ data: null, error: null }),
+    supabase.from('produk').select('*').order('created_at', { ascending: false }),
+    supabase.from('penjualan').select('*').order('created_at', { ascending: false })
+  ]);
+
   let role: 'owner' | 'staff' = 'staff';
-  if (user) {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('id', user.id)
-      .single();
-    if (profile) {
-      role = profile.role as 'owner' | 'staff';
-    }
+  if (profileResult?.data) {
+    role = profileResult.data.role as 'owner' | 'staff';
   }
   const isOwner = role === 'owner';
 
-  // Fetch all products
-  const { data: produkList } = await supabase
-    .from('produk')
-    .select('*')
-    .order('created_at', { ascending: false });
-
-  // Fetch sales
-  const { data: penjualanList } = await supabase
-    .from('penjualan')
-    .select('*')
-    .order('created_at', { ascending: false });
-
-  const products = (produkList as Produk[]) || [];
-  const sales = (penjualanList as Penjualan[]) || [];
+  const products = (produkResult.data as Produk[]) || [];
+  const sales = (penjualanResult.data as Penjualan[]) || [];
 
   // Calculations
   const totalProducts = products.length;

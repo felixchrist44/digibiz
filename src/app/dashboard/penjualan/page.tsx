@@ -13,17 +13,20 @@ export default async function PenjualanPage() {
     redirect('/login');
   }
 
-  // Fetch products catalogue
-  const { data: products } = await supabase
-    .from('produk')
-    .select('*')
-    .order('nama', { ascending: true });
+  // Fetch products and sales invoices history in parallel to avoid waterfalls
+  const [productsResult, invoicesResult] = await Promise.all([
+    supabase
+      .from('produk')
+      .select('*')
+      .order('nama', { ascending: true }),
+    supabase
+      .from('penjualan')
+      .select('*, profiles(full_name)')
+      .order('created_at', { ascending: false })
+  ]);
 
-  // Fetch sales invoices history
-  const { data: invoices } = await supabase
-    .from('penjualan')
-    .select('*, profiles(full_name)')
-    .order('created_at', { ascending: false });
+  const products = productsResult.data;
+  const invoices = invoicesResult.data;
 
   return (
     <PenjualanClient

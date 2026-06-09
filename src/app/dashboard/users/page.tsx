@@ -13,20 +13,23 @@ export default async function UsersPage() {
     redirect('/login');
   }
 
-  // Fetch active user's profile
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .single();
+  // Fetch active user's profile and all profiles in parallel to avoid database query waterfalls
+  const [profileResult, allProfilesResult] = await Promise.all([
+    supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single(),
+    supabase
+      .from('profiles')
+      .select('*')
+      .order('created_at', { ascending: false })
+  ]);
+
+  const profile = profileResult.data;
+  const profiles = allProfilesResult.data;
 
   const currentUserRole = (profile?.role as 'owner' | 'staff') || 'staff';
-
-  // Fetch all user profiles from db
-  const { data: profiles } = await supabase
-    .from('profiles')
-    .select('*')
-    .order('created_at', { ascending: false });
 
   return (
     <UsersClient

@@ -29,20 +29,26 @@ export async function checkoutPenjualan(cart: CartItem[]) {
   const randNum = Math.floor(1000 + Math.random() * 9000);
   const nomor_invoice = `INV-${dateStr}-${randNum}`;
 
-  // Process checkout in sequence (ensure stock check before inserting)
+  // Process checkout optimizing network requests by fetching products and inserting details in bulk
   try {
-    // 1. Stock verification for all items
+    // 1. Stock verification for all items in a single bulk query
+    const productIds = cart.map(item => item.id);
+    const { data: products, error: fetchError } = await supabase
+      .from('produk')
+      .select('id, stok_saat_ini, nama')
+      .in('id', productIds);
+
+    if (fetchError || !products) {
+      return { error: `Gagal memverifikasi stok produk: ${fetchError?.message || 'Produk tidak ditemukan'}` };
+    }
+
+    const productMap = new Map(products.map(p => [p.id, p]));
+
     for (const item of cart) {
-      const { data: product, error: fetchError } = await supabase
-        .from('produk')
-        .select('stok_saat_ini, nama')
-        .eq('id', item.id)
-        .single();
-
-      if (fetchError || !product) {
-        return { error: `Produk "${item.nama}" tidak ditemukan.` };
+      const product = productMap.get(item.id);
+      if (!product) {
+        return { error: `Produk "${item.nama}" tidak ditemukan di database.` };
       }
-
       if (product.stok_saat_ini < item.jumlah) {
         return { error: `Stok tidak mencukupi untuk "${item.nama}". Stok saat ini: ${product.stok_saat_ini} Pcs, diminta: ${item.jumlah} Pcs.` };
       }
@@ -63,37 +69,38 @@ export async function checkoutPenjualan(cart: CartItem[]) {
       return { error: `Gagal membuat invoice: ${invoiceError?.message}` };
     }
 
-    // 3. Create detail items and stock logs
-    for (const item of cart) {
-      // Insert detail_penjualan
-      const { error: detailError } = await supabase
-        .from('detail_penjualan')
-        .insert({
-          penjualan_id: invoice.id,
-          produk_id: item.id,
-          jumlah: item.jumlah,
-          harga_satuan: item.harga,
-          subtotal: item.harga * item.jumlah
-        });
+    // 3. Bulk insert detail items
+    const detailInserts = cart.map(item => ({
+      penjualan_id: invoice.id,
+      produk_id: item.id,
+      jumlah: item.jumlah,
+      harga_satuan: item.harga,
+      subtotal: item.harga * item.jumlah
+    }));
 
-      if (detailError) {
-        throw new Error(`Gagal menyimpan detail penjualan untuk "${item.nama}": ${detailError.message}`);
-      }
+    const { error: detailError } = await supabase
+      .from('detail_penjualan')
+      .insert(detailInserts);
 
-      // Insert stok_log (which triggers product table update)
-      const { error: logError } = await supabase
-        .from('stok_log')
-        .insert({
-          produk_id: item.id,
-          tipe: 'keluar',
-          jumlah: item.jumlah,
-          keterangan: `Penjualan Invoice ${nomor_invoice}`,
-          dibuat_oleh: user.id
-        });
+    if (detailError) {
+      throw new Error(`Gagal menyimpan detail penjualan: ${detailError.message}`);
+    }
 
-      if (logError) {
-        throw new Error(`Gagal memperbarui stok untuk "${item.nama}": ${logError.message}`);
-      }
+    // 4. Bulk insert stock logs
+    const logInserts = cart.map(item => ({
+      produk_id: item.id,
+      tipe: 'keluar',
+      jumlah: item.jumlah,
+      keterangan: `Penjualan Invoice ${nomor_invoice}`,
+      dibuat_oleh: user.id
+    }));
+
+    const { error: logError } = await supabase
+      .from('stok_log')
+      .insert(logInserts);
+
+    if (logError) {
+      throw new Error(`Gagal memperbarui stok: ${logError.message}`);
     }
 
     revalidatePath('/dashboard/penjualan');

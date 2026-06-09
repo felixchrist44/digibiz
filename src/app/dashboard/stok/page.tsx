@@ -13,17 +13,20 @@ export default async function StokPage() {
     redirect('/login');
   }
 
-  // Fetch stock logs with joined product name and profile full name
-  const { data: logs } = await supabase
-    .from('stok_log')
-    .select('*, produk(nama), profiles(full_name)')
-    .order('created_at', { ascending: false });
+  // Fetch stock logs and products in parallel to avoid database query waterfalls
+  const [logsResult, productsResult] = await Promise.all([
+    supabase
+      .from('stok_log')
+      .select('*, produk(nama), profiles(full_name)')
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('produk')
+      .select('*')
+      .order('nama', { ascending: true })
+  ]);
 
-  // Fetch all products for the mutasi modal selection dropdown
-  const { data: products } = await supabase
-    .from('produk')
-    .select('*')
-    .order('nama', { ascending: true });
+  const logs = logsResult.data;
+  const products = productsResult.data;
 
   return (
     <StokClient

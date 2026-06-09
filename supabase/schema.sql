@@ -160,3 +160,128 @@ create policy "Allow authenticated users to delete product images" on storage.ob
 
 -- 8. Add harga_modal to produk table (for existing databases)
 alter table public.produk add column if not exists harga_modal numeric(12,2) check (harga_modal >= 0);
+
+-- 9. Create receipts and receipt_archives tables for Tiered Retention (Stage 1 & 2)
+create table if not exists public.receipts (
+  id uuid default gen_random_uuid() primary key,
+  nomor_invoice text unique not null,
+  total_harga numeric(12,2) not null check (total_harga >= 0),
+  dibuat_oleh uuid references public.profiles(id) on delete set null,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  deleted_at timestamp with time zone default null
+);
+
+create table if not exists public.receipt_items (
+  id uuid default gen_random_uuid() primary key,
+  receipt_id uuid references public.receipts on delete cascade not null,
+  produk_id uuid references public.produk on delete set null,
+  jumlah integer not null check (jumlah > 0),
+  harga_satuan numeric(12,2) not null check (harga_satuan >= 0),
+  subtotal numeric(12,2) not null check (subtotal >= 0),
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+create table if not exists public.receipt_archives (
+  id uuid primary key,
+  original_receipt_id uuid references public.receipts(id) on delete set null,
+  nomor_invoice text not null,
+  total_harga numeric(12,2) not null check (total_harga >= 0),
+  dibuat_oleh uuid references public.profiles(id) on delete set null,
+  created_at timestamp with time zone not null,
+  archived_at timestamp with time zone default timezone('utc'::text, now()) not null,
+  deleted_at timestamp with time zone default null
+);
+
+create table if not exists public.receipt_item_archives (
+  id uuid primary key,
+  receipt_archive_id uuid references public.receipt_archives on delete cascade not null,
+  produk_id uuid references public.produk on delete set null,
+  jumlah integer not null check (jumlah > 0),
+  harga_satuan numeric(12,2) not null check (harga_satuan >= 0),
+  subtotal numeric(12,2) not null check (subtotal >= 0),
+  created_at timestamp with time zone not null
+);
+
+-- Enable RLS on receipts and archives
+alter table public.receipts enable row level security;
+alter table public.receipt_items enable row level security;
+alter table public.receipt_archives enable row level security;
+alter table public.receipt_item_archives enable row level security;
+
+-- Setup RLS Policies (Drop first to prevent conflicts)
+drop policy if exists "Allow read/write on receipts for authenticated users" on public.receipts;
+create policy "Allow read/write on receipts for authenticated users" on public.receipts for all to authenticated using (true);
+
+drop policy if exists "Allow read/write on receipt_items for authenticated users" on public.receipt_items;
+create policy "Allow read/write on receipt_items for authenticated users" on public.receipt_items for all to authenticated using (true);
+
+drop policy if exists "Allow read/write on receipt_archives for authenticated users" on public.receipt_archives;
+create policy "Allow read/write on receipt_archives for authenticated users" on public.receipt_archives for all to authenticated using (true);
+
+drop policy if exists "Allow read/write on receipt_item_archives for authenticated users" on public.receipt_item_archives;
+create policy "Allow read/write on receipt_item_archives for authenticated users" on public.receipt_item_archives for all to authenticated using (true);
+
+-- Indexes for slow/historical analytical lookups (Stage 2)
+create index if not exists idx_receipt_archives_created_at on public.receipt_archives (created_at);
+create index if not exists idx_receipt_archives_deleted_at on public.receipt_archives (deleted_at);
+create index if not exists idx_receipt_archives_invoice on public.receipt_archives (nomor_invoice);
+create index if not exists idx_receipt_item_archives_receipt on public.receipt_item_archives (receipt_archive_id);
+create index if not exists idx_receipt_item_archives_product on public.receipt_item_archives (produk_id);
+
+-- 10. Create default active views that filter out soft-deleted records (Stage 3)
+create or replace view public.active_receipts as
+select * from public.receipts
+where deleted_at is null;
+
+create or replace view public.active_receipt_archives as
+select * from public.receipt_archives
+where deleted_at is null;
+
+-- 11. Create data-retention routine function (Stage 4 & Idempotency / ON CONFLICT)
+create or replace function public.run_receipt_data_retention()
+returns void as $$
+begin
+  -- STAGE 2: Migrate records older than 90 days from receipts to receipt_archives
+  -- Safe idempotent inserts using ON CONFLICT DO NOTHING
+  insert into public.receipt_archives (id, original_receipt_id, nomor_invoice, total_harga, dibuat_oleh, created_at, deleted_at)
+  select id, id, nomor_invoice, total_harga, dibuat_oleh, created_at, deleted_at
+  from public.receipts
+  where created_at < now() - interval '90 days'
+  on conflict (id) do nothing;
+
+  insert into public.receipt_item_archives (id, receipt_archive_id, produk_id, jumlah, harga_satuan, subtotal, created_at)
+  select id, receipt_id, produk_id, jumlah, harga_satuan, subtotal, created_at
+  from public.receipt_items
+  where receipt_id in (select id from public.receipt_archives)
+  on conflict (id) do nothing;
+
+  -- Synchronously delete migrated records from primary receipts table
+  -- Linked receipt_items details are cascade deleted automatically
+  delete from public.receipts
+  where created_at < now() - interval '90 days';
+
+  -- STAGE 3: Soft Delete records in receipt_archives older than 2 years (2 - 10 Years)
+  update public.receipt_archives
+  set deleted_at = now()
+  where created_at < now() - interval '2 years'
+    and deleted_at is null;
+
+  -- STAGE 4: Hard Delete records older than 10 years (10+ Years)
+  -- Associated receipt_item_archives lines are deleted via cascade constraint
+  delete from public.receipt_archives
+  where created_at < now() - interval '10 years';
+end;
+$$ language plpgsql security definer;
+
+-- 12. Register Supabase pg_cron job daily trigger
+create extension if not exists pg_cron with schema extensions;
+
+-- Unschedule first if exists to prevent duplicates
+select cron.unschedule('receipt-data-retention');
+
+-- Schedule the retention routine function daily at midnight
+select cron.schedule(
+  'receipt-data-retention',
+  '0 0 * * *',
+  $$ select public.run_receipt_data_retention(); $$
+);
