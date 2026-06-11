@@ -18,7 +18,8 @@ import {
   Shield,
   Barcode,
   ShoppingCart,
-  Camera
+  Camera,
+  BarChart3
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -111,9 +112,10 @@ export default function Sidebar({ user, children }: SidebarProps) {
     { name: 'Ringkasan', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Daftar Produk', href: '/dashboard/produk', icon: Package },
     { name: 'Checkout Kasir', href: '/dashboard/checkout', icon: ShoppingCart },
-    { name: 'Pemindai Mobile', href: '/dashboard/scanner', icon: Camera },
+    { name: 'Pemindai Mobile', href: '/dashboard/scan', icon: Camera },
     { name: 'Transaksi Penjualan', href: '/dashboard/penjualan', icon: TrendingUp },
     { name: 'Riwayat Stok', href: '/dashboard/stok', icon: History },
+    { name: 'Laporan Keuangan', href: '/dashboard/laporan', icon: BarChart3 },
     { name: 'Pengguna', href: '/dashboard/users', icon: Users },
   ];
 
@@ -187,6 +189,10 @@ export default function Sidebar({ user, children }: SidebarProps) {
         {/* Navigation Links */}
         <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
           {menuItems.map((item) => {
+            // Hide financial report menu from staff
+            if (item.href === '/dashboard/laporan' && user.role !== 'owner') {
+              return null;
+            }
             const Icon = item.icon;
             const isActive = pathname === item.href;
             return (
