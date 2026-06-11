@@ -13,29 +13,28 @@ export default async function LaporanPage() {
     redirect('/login');
   }
 
-  // 2. Fetch user profile role to restrict access
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single();
-
-  if (!profile || profile.role !== 'owner') {
-    // Restrict access: Redirect non-owner profiles back to main dashboard
-    redirect('/dashboard');
-  }
-
-  // 3. Query sales invoices with detail items and product info
-  const [productsResult, salesResult] = await Promise.all([
+  // 2. Query user profile role, products, and sales concurrently to eliminate waterfalls
+  const [profileResult, productsResult, salesResult] = await Promise.all([
+    supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', user.id)
+      .single(),
     supabase
       .from('produk')
-      .select('*')
+      .select('id, nama, kode_produk, harga, harga_modal')
       .order('nama', { ascending: true }),
     supabase
       .from('penjualan')
-      .select('*, profiles(full_name), detail_penjualan(*, produk(*))')
+      .select('id, nomor_invoice, total_harga, created_at, profiles(full_name), detail_penjualan(id, jumlah, harga_satuan, subtotal, produk_id, produk(nama, harga_modal))')
       .order('created_at', { ascending: false })
   ]);
+
+  // 3. Enforce server-side authorization check immediately
+  const profile = profileResult.data;
+  if (!profile || profile.role !== 'owner') {
+    redirect('/dashboard');
+  }
 
   const products = (productsResult.data as Produk[]) || [];
   const sales = (salesResult.data as any[]) || [];
