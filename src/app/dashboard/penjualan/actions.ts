@@ -1,6 +1,6 @@
 'use server';
 
-import { createClient } from '@/utils/supabase/server';
+import { getAuthenticatedUser } from '@/utils/supabase/auth';
 import { revalidatePath } from 'next/cache';
 
 interface CartItem {
@@ -15,10 +15,8 @@ export async function checkoutPenjualan(cart: CartItem[]) {
     return { error: 'Keranjang belanja kosong.' };
   }
 
-  const supabase = await createClient();
-
-  // Retrieve user session
-  const { data: { user } } = await supabase.auth.getUser();
+  // Use cached auth — eliminates getUser() round-trip
+  const { user, supabase } = await getAuthenticatedUser();
   if (!user) return { error: 'Sesi kedaluwarsa. Silakan masuk kembali.' };
 
   // Calculate total price

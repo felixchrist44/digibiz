@@ -1,39 +1,23 @@
 'use server';
 
 import { createClient } from '@/utils/supabase/server';
+import { getAuthenticatedUser } from '@/utils/supabase/auth';
 import { revalidatePath } from 'next/cache';
 
-async function verifyOwner() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return { isOwner: false, userId: null };
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single();
-
-  return { isOwner: profile?.role === 'owner', userId: user.id };
+export async function getUserAuthDetails() {
+  const { profile } = await getAuthenticatedUser();
+  if (!profile) return null;
+  return { id: profile.id, role: profile.role };
 }
 
-async function getUserProfile() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return null;
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .single();
-
-  return profile;
+async function verifyOwner() {
+  const profile = await getUserAuthDetails();
+  return { isOwner: profile?.role === 'owner', userId: profile?.id || null };
 }
 
 export async function createProduk(formData: FormData) {
   const supabase = await createClient();
-  const profile = await getUserProfile();
+  const profile = await getUserAuthDetails();
   if (!profile) return { error: 'Sesi kedaluwarsa. Silakan masuk kembali.' };
 
   if (profile.role !== 'owner') {
@@ -121,19 +105,17 @@ export async function createProduk(formData: FormData) {
 }
 
 export async function updateProduk(id: string, formData: FormData) {
-  const supabase = await createClient();
-
-  // Execute user profile and product details retrieval in parallel to avoid waterfalls
-  const [profile, { data: currentProduct, error: fetchError }] = await Promise.all([
-    getUserProfile(),
-    supabase
-      .from('produk')
-      .select('harga, harga_modal, gambar_url')
-      .eq('id', id)
-      .single()
-  ]);
-
+  // Use cached auth — eliminates getUser() + profile query waterfall
+  const { profile, supabase } = await getAuthenticatedUser();
   if (!profile) return { error: 'Sesi kedaluwarsa.' };
+
+  // Only product query needed — profile already cached
+  const { data: currentProduct, error: fetchError } = await supabase
+    .from('produk')
+    .select('harga, harga_modal, gambar_url')
+    .eq('id', id)
+    .single();
+
   if (fetchError || !currentProduct) {
     return { error: 'Produk tidak ditemukan.' };
   }
@@ -170,6 +152,8 @@ export async function updateProduk(id: string, formData: FormData) {
 
   // Handle Image Upload if a new file was provided, avoiding Buffer overhead by uploading the File object directly
   const imageFile = formData.get('gambar') as File | null;
+  let oldImageToDelete: string | null = null;
+
   if (imageFile && imageFile.size > 0 && imageFile.name) {
     try {
       const fileExt = imageFile.name.split('.').pop();
@@ -194,16 +178,9 @@ export async function updateProduk(id: string, formData: FormData) {
 
       updateData.gambar_url = urlData.publicUrl;
 
-      // Optional: Delete old image from storage if it exists to save space
+      // Mark the old image to delete on database update success
       if (currentProduct.gambar_url) {
-        try {
-          const oldPath = currentProduct.gambar_url.split('/').pop();
-          if (oldPath) {
-            await supabase.storage.from('product-images').remove([oldPath]);
-          }
-        } catch (e) {
-          console.error('Gagal menghapus gambar lama:', e);
-        }
+        oldImageToDelete = currentProduct.gambar_url;
       }
     } catch (err: any) {
       return { error: `Error upload gambar baru: ${err.message || err}` };
@@ -216,7 +193,21 @@ export async function updateProduk(id: string, formData: FormData) {
     .eq('id', id);
 
   if (updateError) {
+    // If the database update fails, we do not delete the old image.
+    // The new uploaded image remains in storage and will be pruned by the cron sweep.
     return { error: updateError.message };
+  }
+
+  // Database update succeeded! Now safely clean up the old image from storage to save space
+  if (oldImageToDelete) {
+    try {
+      const oldPath = oldImageToDelete.split('/').pop();
+      if (oldPath) {
+        await supabase.storage.from('product-images').remove([oldPath]);
+      }
+    } catch (e) {
+      console.error('Gagal menghapus gambar lama:', e);
+    }
   }
 
   revalidatePath('/dashboard/produk');
@@ -231,16 +222,42 @@ export async function deleteProduk(id: string) {
   }
 
   const supabase = await createClient();
-  const { error } = await supabase
+
+  // Fetch the product details first to get the gambar_url
+  const { data: product, error: fetchError } = await supabase
+    .from('produk')
+    .select('gambar_url')
+    .eq('id', id)
+    .single();
+
+  if (fetchError || !product) {
+    return { error: 'Produk tidak ditemukan.' };
+  }
+
+  // Delete product row from the database
+  const { error: deleteError } = await supabase
     .from('produk')
     .delete()
     .eq('id', id);
 
-  if (error) {
-    return { error: error.message };
+  if (deleteError) {
+    return { error: deleteError.message };
+  }
+
+  // Database delete succeeded! Now safely clean up the product image from storage
+  if (product.gambar_url) {
+    try {
+      const fileName = product.gambar_url.split('/').pop();
+      if (fileName) {
+        await supabase.storage.from('product-images').remove([fileName]);
+      }
+    } catch (e) {
+      console.error('Gagal menghapus gambar produk dari storage:', e);
+    }
   }
 
   revalidatePath('/dashboard/produk');
   revalidatePath('/dashboard');
   return { success: true };
 }
+

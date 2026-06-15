@@ -1,33 +1,62 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useTransition } from 'react';
+import { createClient } from '@/utils/supabase/client';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import {
-  TrendingUp,
-  Package,
   Calendar,
   DollarSign,
   PieChart,
-  Layers,
-  ArrowUpRight,
-  Info,
+  Package,
   Clock,
+  Loader2,
+  X,
   ChevronRight,
+  TrendingUp,
   BarChart3,
-  Archive
+  Archive,
+  Info,
+  CheckCircle,
+  Printer
 } from 'lucide-react';
-import { Produk, Penjualan } from '@/types/database';
+
+interface SummaryItem {
+  tanggal: string;
+  produk_id: string;
+  nama_produk: string;
+  sku_produk: string;
+  total_terjual: number;
+  total_pendapatan: number;
+  total_laba: number;
+}
 
 interface Props {
-  products: Produk[];
-  initialSales: any[];
+  initialSummary: SummaryItem[];
+  activeRange: FilterRange;
+  hasMore: boolean;
+  currentPage: number;
 }
 
 type FilterRange = 'all' | 'today' | '7days' | '30days' | 'month';
-type ActiveTab = 'date' | 'product' | 'transaction';
+type ActiveTab = 'date' | 'product';
 
-export default function LaporanClient({ products, initialSales }: Props) {
-  const [filterRange, setFilterRange] = useState<FilterRange>('all');
+export default function LaporanClient({
+  initialSummary,
+  activeRange,
+  hasMore,
+  currentPage
+}: Props) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const [isPending, startTransition] = useTransition();
+
   const [activeTab, setActiveTab] = useState<ActiveTab>('date');
+
+  // Drill-down states
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [drillDownLoading, setDrillDownLoading] = useState(false);
+  const [drillDownData, setDrillDownData] = useState<any[]>([]);
 
   // Format currency helper
   const formatIDR = (value: number) => {
@@ -38,61 +67,16 @@ export default function LaporanClient({ products, initialSales }: Props) {
     }).format(value);
   };
 
-  // Helper date parsing/matching checks
-  const filteredSales = useMemo(() => {
-    const now = new Date();
-    
-    // Normalize current day to local midnight for accurate day bounds comparison
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    
-    return initialSales.filter(sale => {
-      const saleDate = new Date(sale.created_at);
-
-      if (filterRange === 'today') {
-        return saleDate >= startOfToday;
-      }
-      if (filterRange === '7days') {
-        const sevenDaysAgo = new Date(startOfToday.getTime() - 7 * 24 * 60 * 60 * 1000);
-        return saleDate >= sevenDaysAgo;
-      }
-      if (filterRange === '30days') {
-        const thirtyDaysAgo = new Date(startOfToday.getTime() - 30 * 24 * 60 * 60 * 1000);
-        return saleDate >= thirtyDaysAgo;
-      }
-      if (filterRange === 'month') {
-        return (
-          saleDate.getFullYear() === now.getFullYear() &&
-          saleDate.getMonth() === now.getMonth()
-        );
-      }
-      return true; // 'all'
-    });
-  }, [initialSales, filterRange]);
-
-  // Aggregate stats: Omset, Laba Bersih, Margins, Volumes
-  const stats = useMemo(() => {
+  // Since data is now pre-filtered server-side, compute aggregates directly
+  const stats = (() => {
     let totalOmset = 0;
     let totalProfit = 0;
     let totalQty = 0;
 
-    filteredSales.forEach(sale => {
-      totalOmset += Number(sale.total_harga || 0);
-
-      sale.detail_penjualan?.forEach((detail: any) => {
-        const qty = Number(detail.jumlah || 0);
-        const sellPrice = Number(detail.harga_satuan || 0);
-
-        // Find modal cost
-        let modalPrice = Number(detail.produk?.harga_modal || 0);
-        if (!modalPrice) {
-          const catProduct = products.find(p => p.id === detail.produk_id);
-          modalPrice = Number(catProduct?.harga_modal || 0);
-        }
-
-        const profitPerUnit = sellPrice - modalPrice;
-        totalProfit += profitPerUnit * qty;
-        totalQty += qty;
-      });
+    initialSummary.forEach(item => {
+      totalOmset += Number(item.total_pendapatan || 0);
+      totalProfit += Number(item.total_laba || 0);
+      totalQty += Number(item.total_terjual || 0);
     });
 
     const marginPercent = totalOmset > 0 ? (totalProfit / totalOmset) * 100 : 0;
@@ -103,82 +87,58 @@ export default function LaporanClient({ products, initialSales }: Props) {
       margin: marginPercent,
       volume: totalQty
     };
-  }, [filteredSales, products]);
+  })();
 
   // Tab 1: Group by date (Date Summary List)
-  const salesByDate = useMemo(() => {
-    const datesGroup: Record<string, { count: number; omset: number; profit: number }> = {};
+  const salesByDate = (() => {
+    const datesGroup: Record<string, { omset: number; profit: number; volume: number; rawDate: string }> = {};
 
-    filteredSales.forEach(sale => {
-      const dateKey = new Date(sale.created_at).toLocaleDateString('id-ID', {
+    initialSummary.forEach(item => {
+      const dateKey = new Date(item.tanggal).toLocaleDateString('id-ID', {
         day: 'numeric',
         month: 'short',
         year: 'numeric'
       });
 
       if (!datesGroup[dateKey]) {
-        datesGroup[dateKey] = { count: 0, omset: 0, profit: 0 };
+        datesGroup[dateKey] = { omset: 0, profit: 0, volume: 0, rawDate: item.tanggal };
       }
 
-      datesGroup[dateKey].count += 1;
-      datesGroup[dateKey].omset += Number(sale.total_harga || 0);
-
-      sale.detail_penjualan?.forEach((detail: any) => {
-        const qty = Number(detail.jumlah || 0);
-        const sellPrice = Number(detail.harga_satuan || 0);
-
-        let modalPrice = Number(detail.produk?.harga_modal || 0);
-        if (!modalPrice) {
-          const catProduct = products.find(p => p.id === detail.produk_id);
-          modalPrice = Number(catProduct?.harga_modal || 0);
-        }
-
-        const profitPerUnit = sellPrice - modalPrice;
-        datesGroup[dateKey].profit += profitPerUnit * qty;
-      });
+      datesGroup[dateKey].omset += Number(item.total_pendapatan || 0);
+      datesGroup[dateKey].profit += Number(item.total_laba || 0);
+      datesGroup[dateKey].volume += Number(item.total_terjual || 0);
     });
 
-    return Object.entries(datesGroup).map(([date, data]) => ({
-      date,
-      ...data,
+    return Object.entries(datesGroup).map(([formattedDate, data]) => ({
+      dateLabel: formattedDate,
+      rawDate: data.rawDate,
+      omset: data.omset,
+      profit: data.profit,
+      volume: data.volume,
       margin: data.omset > 0 ? (data.profit / data.omset) * 100 : 0
-    }));
-  }, [filteredSales, products]);
+    })).sort((a, b) => b.rawDate.localeCompare(a.rawDate));
+  })();
 
   // Tab 2: Group by product (Product breakdown list)
-  const salesByProduct = useMemo(() => {
+  const salesByProduct = (() => {
     const prodGroup: Record<string, { name: string; sku: string; qty: number; omset: number; profit: number }> = {};
 
-    filteredSales.forEach(sale => {
-      sale.detail_penjualan?.forEach((detail: any) => {
-        const prodId = detail.produk_id || 'unknown';
-        const qty = Number(detail.jumlah || 0);
-        const sellPrice = Number(detail.harga_satuan || 0);
+    initialSummary.forEach(item => {
+      const prodId = item.produk_id || 'unknown';
 
-        let pName = detail.produk?.nama || 'Produk Dihapus';
-        let pSku = detail.produk?.kode_produk || 'N/A';
-        let modalPrice = Number(detail.produk?.harga_modal || 0);
+      if (!prodGroup[prodId]) {
+        prodGroup[prodId] = {
+          name: item.nama_produk || 'Produk Dihapus',
+          sku: item.sku_produk || 'N/A',
+          qty: 0,
+          omset: 0,
+          profit: 0
+        };
+      }
 
-        const catProduct = products.find(p => p.id === detail.produk_id);
-        if (catProduct) {
-          pName = catProduct.nama;
-          pSku = catProduct.kode_produk;
-          if (!modalPrice) {
-            modalPrice = Number(catProduct.harga_modal || 0);
-          }
-        }
-
-        if (!prodGroup[prodId]) {
-          prodGroup[prodId] = { name: pName, sku: pSku, qty: 0, omset: 0, profit: 0 };
-        }
-
-        const itemSub = sellPrice * qty;
-        const profitPerUnit = sellPrice - modalPrice;
-
-        prodGroup[prodId].qty += qty;
-        prodGroup[prodId].omset += itemSub;
-        prodGroup[prodId].profit += profitPerUnit * qty;
-      });
+      prodGroup[prodId].qty += Number(item.total_terjual || 0);
+      prodGroup[prodId].omset += Number(item.total_pendapatan || 0);
+      prodGroup[prodId].profit += Number(item.total_laba || 0);
     });
 
     return Object.values(prodGroup)
@@ -187,51 +147,98 @@ export default function LaporanClient({ products, initialSales }: Props) {
         margin: data.omset > 0 ? (data.profit / data.omset) * 100 : 0
       }))
       .sort((a, b) => b.omset - a.omset);
-  }, [filteredSales, products]);
+  })();
 
-  // Tab 3: Detailed Invoices Log list
-  const invoiceLogs = useMemo(() => {
-    return filteredSales.map(sale => {
-      let profit = 0;
-      let itemsList: string[] = [];
-
-      sale.detail_penjualan?.forEach((detail: any) => {
-        const qty = Number(detail.jumlah || 0);
-        const sellPrice = Number(detail.harga_satuan || 0);
-
-        let pName = detail.produk?.nama || 'Item';
-        let modalPrice = Number(detail.produk?.harga_modal || 0);
-
-        const catProduct = products.find(p => p.id === detail.produk_id);
-        if (catProduct) {
-          pName = catProduct.nama;
-          if (!modalPrice) {
-            modalPrice = Number(catProduct.harga_modal || 0);
-          }
-        }
-
-        itemsList.push(`${pName} (x${qty})`);
-
-        const profitPerUnit = sellPrice - modalPrice;
-        profit += profitPerUnit * qty;
-      });
-
-      return {
-        id: sale.id,
-        invoiceNo: sale.nomor_invoice,
-        timestamp: new Date(sale.created_at).toLocaleString('id-ID', {
-          day: 'numeric',
-          month: 'short',
-          hour: '2-digit',
-          minute: '2-digit'
-        }),
-        cashier: sale.profiles?.full_name || 'Kasir',
-        omset: Number(sale.total_harga || 0),
-        profit,
-        itemsStr: itemsList.join(', ')
-      };
+  // Navigate with URL params (server-side filtering)
+  const handleRangeChange = (range: FilterRange) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('range', range);
+    params.delete('page'); // Reset to page 1 on filter change
+    startTransition(() => {
+      router.push(`${pathname}?${params.toString()}`);
     });
-  }, [filteredSales, products]);
+  };
+
+  // Pagination handler
+  const handlePageChange = (page: number) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('page', page.toString());
+    startTransition(() => {
+      router.push(`${pathname}?${params.toString()}`);
+    });
+  };
+
+  // Dynamic Drill-Down Details Fetching (Lazy-loaded on click)
+  const handleViewDateDetails = async (dateStr: string, formattedLabel: string) => {
+    setSelectedDate(formattedLabel);
+    setDrillDownLoading(true);
+    setDrillDownData([]);
+
+    try {
+      const supabase = createClient();
+      
+      // Select exact invoices list generated on the specific date bounds
+      const { data, error } = await supabase
+        .from('penjualan')
+        .select(`
+          id,
+          nomor_invoice,
+          total_harga,
+          created_at,
+          profiles(full_name),
+          detail_penjualan(
+            id,
+            jumlah,
+            harga_satuan,
+            subtotal,
+            produk(nama, kode_produk, harga_modal)
+          )
+        `)
+        .gte('created_at', `${dateStr}T00:00:00.000Z`)
+        .lte('created_at', `${dateStr}T23:59:59.999Z`)
+        .order('created_at', { ascending: false });
+
+      if (!error && data) {
+        setDrillDownData(data);
+      } else if (error) {
+        console.error('Error fetching details:', error.message);
+      }
+    } catch (err) {
+      console.error('Failed to execute drilldown lookup:', err);
+    } finally {
+      setDrillDownLoading(false);
+    }
+  };
+
+  // Reusable Pagination Component
+  const PaginationControls = () => {
+    const hasPrevious = currentPage > 1;
+    if (!hasPrevious && !hasMore) return null;
+
+    return (
+      <div className="flex items-center justify-between gap-4 bg-slate-950/30 p-4 border border-slate-855 rounded-2xl backdrop-blur-md mt-6">
+        <button
+          onClick={() => handlePageChange(currentPage - 1)}
+          disabled={!hasPrevious || isPending}
+          className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-950 border border-slate-800 text-slate-450 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-900/50 transition-all duration-150 active:scale-[0.98]"
+        >
+          Sebelumnya
+        </button>
+
+        <span className="text-xs text-slate-400 font-bold font-sans">
+          Halaman {currentPage}
+        </span>
+
+        <button
+          onClick={() => handlePageChange(currentPage + 1)}
+          disabled={!hasMore || isPending}
+          className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-950 border border-slate-800 text-slate-455 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-900/50 transition-all duration-150 active:scale-[0.98]"
+        >
+          Selanjutnya
+        </button>
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-8">
@@ -244,11 +251,11 @@ export default function LaporanClient({ products, initialSales }: Props) {
             Laporan Analitik Keuangan
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Data rekapitulasi penjualan, laba bersih, and profit margin (Hanya Akses Owner).
+            Data pre-agregasi database penjualan, laba bersih, and profit margin (Hanya Akses Owner).
           </p>
         </div>
 
-        {/* Date Filter Buttons Option Group */}
+        {/* Date Filter Buttons */}
         <div className="flex flex-wrap items-center bg-slate-900 border border-slate-850 p-1.5 rounded-2xl gap-1 shrink-0 self-start xl:self-center">
           {(
             [
@@ -261,12 +268,13 @@ export default function LaporanClient({ products, initialSales }: Props) {
           ).map(btn => (
             <button
               key={btn.range}
-              onClick={() => setFilterRange(btn.range)}
+              onClick={() => handleRangeChange(btn.range)}
+              disabled={isPending}
               className={`px-4 py-2 text-xs font-semibold rounded-xl transition-all cursor-pointer ${
-                filterRange === btn.range
+                activeRange === btn.range
                   ? 'bg-indigo-600 text-white shadow-md'
                   : 'text-slate-400 hover:text-slate-200'
-              }`}
+              } ${isPending ? 'opacity-60' : ''}`}
             >
               {btn.label}
             </button>
@@ -274,8 +282,8 @@ export default function LaporanClient({ products, initialSales }: Props) {
         </div>
       </div>
 
-      {/* Metric Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+      {/* KPI Cards Grid */}
+      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 transition-opacity duration-200 ${isPending ? 'opacity-50 pointer-events-none' : ''}`}>
         
         {/* Omset / Gross Revenue */}
         <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-6 hover:border-slate-700/60 transition-all flex items-center justify-between">
@@ -323,16 +331,26 @@ export default function LaporanClient({ products, initialSales }: Props) {
 
       </div>
 
-      {/* Main Report Details Tab Switching block */}
+      {/* Record count info */}
+      <div className="flex items-center justify-between text-xs text-slate-455 font-medium px-1">
+        <span>Menampilkan {initialSummary.length} data ringkasan (Halaman {currentPage})</span>
+        {isPending && (
+          <span className="flex items-center gap-1.5 text-indigo-400">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Memuat...
+          </span>
+        )}
+      </div>
+
+      {/* Main Tab Panels */}
       <div className="space-y-6">
         
         {/* Navigation Tabs */}
-        <div className="flex bg-slate-900/80 border border-slate-850 p-1 rounded-2xl max-w-md">
+        <div className="flex bg-slate-900/80 border border-slate-850 p-1 rounded-2xl max-w-[320px]">
           {(
             [
               { id: 'date', label: 'Ringkasan Tanggal', icon: Calendar },
-              { id: 'product', label: 'Rincian Produk', icon: Archive },
-              { id: 'transaction', label: 'Log Transaksi', icon: Clock }
+              { id: 'product', label: 'Rincian Produk', icon: Archive }
             ] as const
           ).map(tab => {
             const TabIcon = tab.icon;
@@ -340,23 +358,23 @@ export default function LaporanClient({ products, initialSales }: Props) {
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex-1 flex items-center justify-center gap-2 py-2.5 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
                   activeTab === tab.id
                     ? 'bg-indigo-600 text-white shadow-md'
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
-                <TabIcon className="h-4 w-4" />
+                <TabIcon className="h-3.5 w-3.5" />
                 {tab.label}
               </button>
             );
           })}
         </div>
 
-        {/* Display Tab content */}
-        <div className="bg-slate-900/40 border border-slate-800/80 backdrop-blur rounded-3xl p-6 shadow-xl min-h-[400px]">
+        {/* Display Tab Content */}
+        <div className={`bg-slate-900/40 border border-slate-800/80 backdrop-blur rounded-3xl p-6 shadow-xl min-h-[400px] transition-opacity duration-200 ${isPending ? 'opacity-50 pointer-events-none' : ''}`}>
           
-          {/* TAB 1: GROUP BY DATE SUMMARY */}
+          {/* TAB 1: DATE SUMMARY LIST */}
           {activeTab === 'date' && (
             <div className="overflow-x-auto">
               {salesByDate.length === 0 ? (
@@ -364,37 +382,50 @@ export default function LaporanClient({ products, initialSales }: Props) {
                   Tidak ada transaksi tercatat pada periode ini.
                 </div>
               ) : (
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-800 text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-950/20">
-                      <th className="py-4 px-5">Tanggal</th>
-                      <th className="py-4 px-5 text-center">Jumlah Transaksi</th>
-                      <th className="py-4 px-5 text-right">Omset Kotor</th>
-                      <th className="py-4 px-5 text-right">Laba Bersih</th>
-                      <th className="py-4 px-5 text-center">Rata Margin</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-850/60 text-xs text-slate-300">
-                    {salesByDate.map((row) => (
-                      <tr key={row.date} className="hover:bg-slate-950/20 transition-all">
-                        <td className="py-4 px-5 font-bold text-white">{row.date}</td>
-                        <td className="py-4 px-5 text-center text-slate-400 font-semibold">{row.count} Invoice</td>
-                        <td className="py-4 px-5 text-right font-semibold text-slate-100">{formatIDR(row.omset)}</td>
-                        <td className="py-4 px-5 text-right font-black text-emerald-400">{formatIDR(row.profit)}</td>
-                        <td className="py-4 px-5 text-center">
-                          <span className="px-2 py-0.5 rounded bg-purple-500/10 border border-purple-500/10 text-purple-400 font-extrabold text-[10px]">
-                            {row.margin.toFixed(1)}%
-                          </span>
-                        </td>
+                <>
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-950/20">
+                        <th className="py-4 px-5">Tanggal</th>
+                        <th className="py-4 px-5 text-center">Volume Terjual</th>
+                        <th className="py-4 px-5 text-right">Omset Kotor</th>
+                        <th className="py-4 px-5 text-right">Laba Bersih</th>
+                        <th className="py-4 px-5 text-center">Margin</th>
+                        <th className="py-4 px-5 text-right">Aksi</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-850/60 text-xs text-slate-300">
+                      {salesByDate.map((row) => (
+                        <tr key={row.rawDate} className="hover:bg-slate-950/20 transition-all">
+                          <td className="py-4 px-5 font-bold text-white">{row.dateLabel}</td>
+                          <td className="py-4 px-5 text-center font-semibold text-slate-400">{row.volume} Pcs</td>
+                          <td className="py-4 px-5 text-right font-semibold text-slate-100">{formatIDR(row.omset)}</td>
+                          <td className="py-4 px-5 text-right font-black text-emerald-400">{formatIDR(row.profit)}</td>
+                          <td className="py-4 px-5 text-center">
+                            <span className="px-2 py-0.5 rounded bg-purple-500/10 border border-purple-500/10 text-purple-400 font-extrabold text-[10px]">
+                              {row.margin.toFixed(1)}%
+                            </span>
+                          </td>
+                          <td className="py-4 px-5 text-right">
+                            <button
+                              onClick={() => handleViewDateDetails(row.rawDate, row.dateLabel)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-950/40 border border-slate-800 hover:border-slate-750 text-slate-400 hover:text-white rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                            >
+                              Rincian Hari
+                              <ChevronRight className="h-3 w-3 text-indigo-400" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <PaginationControls />
+                </>
               )}
             </div>
           )}
 
-          {/* TAB 2: PRODUCT BREAKDOWN SALES */}
+          {/* TAB 2: PRODUCT SALES BREAKDOWN */}
           {activeTab === 'product' && (
             <div className="overflow-x-auto">
               {salesByProduct.length === 0 ? (
@@ -402,78 +433,176 @@ export default function LaporanClient({ products, initialSales }: Props) {
                   Tidak ada item terjual pada periode ini.
                 </div>
               ) : (
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-800 text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-950/20">
-                      <th className="py-4 px-5">Nama Barang</th>
-                      <th className="py-4 px-5">SKU / Kode</th>
-                      <th className="py-4 px-5 text-center">Volume Terjual</th>
-                      <th className="py-4 px-5 text-right">Total Omset</th>
-                      <th className="py-4 px-5 text-right">Laba Bersih</th>
-                      <th className="py-4 px-5 text-center">Margin Margin</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-850/60 text-xs text-slate-300">
-                    {salesByProduct.map((row) => (
-                      <tr key={row.sku} className="hover:bg-slate-950/20 transition-all">
-                        <td className="py-4 px-5 font-bold text-white">{row.name}</td>
-                        <td className="py-4 px-5 font-mono text-slate-450 text-[10px]">{row.sku}</td>
-                        <td className="py-4 px-5 text-center font-bold text-indigo-400">{row.qty} Pcs</td>
-                        <td className="py-4 px-5 text-right font-semibold text-slate-100">{formatIDR(row.omset)}</td>
-                        <td className="py-4 px-5 text-right font-black text-emerald-400">{formatIDR(row.profit)}</td>
-                        <td className="py-4 px-5 text-center">
-                          <span className="px-2 py-0.5 rounded bg-purple-500/10 border border-purple-500/10 text-purple-400 font-extrabold text-[10px]">
-                            {row.margin.toFixed(1)}%
-                          </span>
-                        </td>
+                <>
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-950/20">
+                        <th className="py-4 px-5">Nama Barang</th>
+                        <th className="py-4 px-5">SKU / Kode</th>
+                        <th className="py-4 px-5 text-center">Volume Terjual</th>
+                        <th className="py-4 px-5 text-right">Total Omset</th>
+                        <th className="py-4 px-5 text-right">Laba Bersih</th>
+                        <th className="py-4 px-5 text-center">Margin</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          )}
-
-          {/* TAB 3: COMPLETE SALES INVOICE LOGS */}
-          {activeTab === 'transaction' && (
-            <div className="overflow-x-auto">
-              {invoiceLogs.length === 0 ? (
-                <div className="py-20 text-center text-slate-550 italic text-sm">
-                  Tidak ada invoice terdaftar pada periode ini.
-                </div>
-              ) : (
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-800 text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-950/20">
-                      <th className="py-4 px-5">Nomor Invoice</th>
-                      <th className="py-4 px-5">Waktu Transaksi</th>
-                      <th className="py-4 px-5">Operator Kasir</th>
-                      <th className="py-4 px-5 max-w-[200px]">Item Terjual</th>
-                      <th className="py-4 px-5 text-right">Nilai Belanja</th>
-                      <th className="py-4 px-5 text-right">Laba Bersih</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-850/60 text-xs text-slate-300">
-                    {invoiceLogs.map((row) => (
-                      <tr key={row.id} className="hover:bg-slate-950/20 transition-all">
-                        <td className="py-4 px-5 font-bold text-white">{row.invoiceNo}</td>
-                        <td className="py-4 px-5 text-slate-450">{row.timestamp}</td>
-                        <td className="py-4 px-5 text-slate-400 font-semibold">{row.cashier}</td>
-                        <td className="py-4 px-5 text-slate-450 italic truncate max-w-[200px]" title={row.itemsStr}>
-                          {row.itemsStr}
-                        </td>
-                        <td className="py-4 px-5 text-right font-semibold text-slate-100">{formatIDR(row.omset)}</td>
-                        <td className="py-4 px-5 text-right font-black text-emerald-400">{formatIDR(row.profit)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-850/60 text-xs text-slate-300">
+                      {salesByProduct.map((row) => (
+                        <tr key={row.sku} className="hover:bg-slate-950/20 transition-all">
+                          <td className="py-4 px-5 font-bold text-white">{row.name}</td>
+                          <td className="py-4 px-5 font-mono text-slate-450 text-[10px]">{row.sku}</td>
+                          <td className="py-4 px-5 text-center font-bold text-indigo-400">{row.qty} Pcs</td>
+                          <td className="py-4 px-5 text-right font-semibold text-slate-100">{formatIDR(row.omset)}</td>
+                          <td className="py-4 px-5 text-right font-black text-emerald-400">{formatIDR(row.profit)}</td>
+                          <td className="py-4 px-5 text-center">
+                            <span className="px-2 py-0.5 rounded bg-purple-500/10 border border-purple-500/10 text-purple-400 font-extrabold text-[10px]">
+                              {row.margin.toFixed(1)}%
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <PaginationControls />
+                </>
               )}
             </div>
           )}
 
         </div>
       </div>
+
+      {/* ==================== LAZY-LOADED DRILL-DOWN INVOICES MODAL ==================== */}
+      {selectedDate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4">
+          <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 shadow-2xl relative animate-in zoom-in-95 duration-150 max-h-[90vh] flex flex-col">
+            
+            {/* Modal Close Button */}
+            <button
+              onClick={() => setSelectedDate(null)}
+              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg cursor-pointer"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            {/* Modal Header */}
+            <div className="border-b border-slate-800 pb-3 mb-6">
+              <h2 className="text-lg font-bold text-white">Rincian Transaksi POS</h2>
+              <p className="text-xs text-indigo-400 font-mono mt-0.5">{selectedDate}</p>
+            </div>
+
+            {/* Drilldown Body */}
+            <div className="flex-1 overflow-y-auto min-h-[250px] space-y-6 pr-1">
+              {drillDownLoading ? (
+                <div className="h-full py-20 flex flex-col items-center justify-center text-slate-500 text-xs">
+                  <Loader2 className="h-8 w-8 animate-spin text-indigo-400 mb-3" />
+                  Memuat data transaksi dari server...
+                </div>
+              ) : drillDownData.length === 0 ? (
+                <div className="py-20 text-center text-slate-500 italic text-xs">
+                  Tidak ditemukan record invoice pada tanggal ini.
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {drillDownData.map((inv) => {
+                    return (
+                      <div
+                        key={inv.id}
+                        className="bg-slate-950/40 border border-slate-850 p-5 rounded-2xl space-y-4 hover:border-slate-800 transition-all"
+                      >
+                        {/* Invoice Header Details */}
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs pb-3 border-b border-slate-850">
+                          <div>
+                            <span className="text-[10px] font-mono font-bold text-indigo-400 bg-indigo-950/20 border border-indigo-900/30 px-2 py-0.5 rounded">
+                              {inv.nomor_invoice}
+                            </span>
+                            <span className="text-slate-400 font-semibold ml-2.5">
+                              Pukul {new Date(inv.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                          <div className="text-slate-450 font-medium">
+                            Operator: <span className="font-bold text-slate-300">{inv.profiles?.full_name || 'Kasir'}</span>
+                          </div>
+                        </div>
+
+                        {/* Sold Items Table */}
+                        <div className="space-y-2">
+                          <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Item Terjual</span>
+                          <div className="space-y-2">
+                            {inv.detail_penjualan?.map((item: any) => {
+                              const sellPrice = Number(item.harga_satuan || 0);
+                              const modalCost = Number(item.produk?.harga_modal || 0);
+                              const profitRow = (sellPrice - modalCost) * item.jumlah;
+
+                              return (
+                                <div
+                                  key={item.id}
+                                  className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-xl bg-slate-900/40 border border-slate-850/50 text-xs gap-2"
+                                >
+                                  <div className="min-w-0">
+                                    <p className="font-bold text-white truncate">{item.produk?.nama || 'Produk Dihapus'}</p>
+                                    <p className="text-[10px] text-slate-500 font-mono mt-0.5">
+                                      SKU: {item.produk?.kode_produk || 'N/A'}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-6 text-right self-end sm:self-auto shrink-0">
+                                    <div className="text-slate-400">
+                                      {formatIDR(sellPrice)} x{item.jumlah}
+                                    </div>
+                                    <div className="font-bold text-slate-200 min-w-[90px]">
+                                      {formatIDR(Number(item.subtotal))}
+                                    </div>
+                                    <div className="font-bold text-emerald-400 min-w-[90px] border-l border-slate-850 pl-4 text-right">
+                                      + {formatIDR(profitRow)}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Invoice Summary Totals */}
+                        <div className="pt-3 border-t border-slate-850/50 flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="text-slate-450 font-semibold">Laba Invoice:</span>
+                            <span className="font-black text-emerald-400">
+                              {formatIDR(inv.detail_penjualan?.reduce((sum: number, it: any) => {
+                                const cost = Number(it.produk?.harga_modal || 0);
+                                return sum + (Number(it.harga_satuan) - cost) * it.jumlah;
+                              }, 0) || 0)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-slate-400 font-bold">Total Belanja:</span>
+                            <span className="text-sm font-black text-indigo-400">
+                              {formatIDR(Number(inv.total_harga))}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="border-t border-slate-800 pt-4 mt-6 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5 text-slate-450">
+                <Info className="h-4 w-4 text-indigo-400 shrink-0" />
+                <span>Klik tanda silang atau di luar modal untuk menutup rincian.</span>
+              </div>
+              <button
+                onClick={() => setSelectedDate(null)}
+                className="px-5 py-2.5 bg-slate-950 border border-slate-800 text-slate-400 hover:text-white rounded-xl font-bold cursor-pointer transition-colors"
+              >
+                Tutup Rincian
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
       
     </div>
   );

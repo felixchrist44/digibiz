@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useState, useTransition } from 'react';
+import React, { useState, useTransition, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { checkoutPenjualan } from '@/app/dashboard/penjualan/actions';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import {
   Search,
   ShoppingCart,
@@ -15,13 +16,16 @@ import {
   History,
   Info,
   DollarSign,
-  ArrowRight
+  ArrowRight,
+  Loader2
 } from 'lucide-react';
 import { Produk, Penjualan, DetailPenjualan } from '@/types/database';
 
 interface Props {
   products: Produk[];
   initialInvoices: Penjualan[];
+  hasMore: boolean;
+  currentPage: number;
 }
 
 interface CartItem {
@@ -32,13 +36,54 @@ interface CartItem {
   maxStok: number;
 }
 
-export default function PenjualanClient({ products, initialInvoices }: Props) {
+export default function PenjualanClient({
+  products: initialProducts,
+  initialInvoices,
+  hasMore,
+  currentPage
+}: Props) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+
   const [activeTab, setActiveTab] = useState<'pos' | 'history'>('pos');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [search, setSearch] = useState('');
+  const [products, setProducts] = useState<Produk[]>(initialProducts);
   const [cashReceived, setCashReceived] = useState<string>('');
   const [invoices, setInvoices] = useState<Penjualan[]>(initialInvoices);
   const [isPending, startTransition] = useTransition();
+
+  // Sync state values on initial props change from server updates
+  useEffect(() => {
+    setProducts(initialProducts);
+  }, [initialProducts]);
+
+  useEffect(() => {
+    setInvoices(initialInvoices);
+  }, [initialInvoices]);
+
+  // Autocomplete search execution from API endpoint
+  useEffect(() => {
+    if (!search.trim()) {
+      setProducts(initialProducts);
+      return;
+    }
+
+    const delayDebounceFn = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/produk/search?q=${encodeURIComponent(search)}`);
+        if (res.ok) {
+          const data = await res.json();
+          setProducts(data);
+        }
+      } catch (err) {
+        console.error('Error fetching search results:', err);
+      }
+    }, 250);
+
+    return () => clearTimeout(delayDebounceFn);
+  }, [search, initialProducts]);
 
   // Modals state
   const [successInvoice, setSuccessInvoice] = useState<any | null>(null);
@@ -49,11 +94,8 @@ export default function PenjualanClient({ products, initialInvoices }: Props) {
   // Error alert
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Search logic
-  const filteredProducts = products.filter(p =>
-    p.nama.toLowerCase().includes(search.toLowerCase()) ||
-    p.kode_produk.toLowerCase().includes(search.toLowerCase())
-  );
+  // Search logic is handled dynamically via autocomplete fetch
+  const filteredProducts = products;
 
   // Add to cart
   const addToCart = (product: Produk) => {
@@ -136,13 +178,8 @@ export default function PenjualanClient({ products, initialInvoices }: Props) {
         setCart([]);
         setCashReceived('');
 
-        // Refresh invoices list locally
-        const supabase = createClient();
-        const { data } = await supabase
-          .from('penjualan')
-          .select('*, profiles(full_name)')
-          .order('created_at', { ascending: false });
-        if (data) setInvoices(data as any[]);
+        // Refresh dynamic server routes
+        router.refresh();
       }
     });
   };
@@ -400,6 +437,7 @@ export default function PenjualanClient({ products, initialInvoices }: Props) {
               Belum ada riwayat transaksi penjualan tercatat.
             </div>
           ) : (
+            <>
             <table className="w-full text-left border-collapse min-w-[700px]">
               <thead>
                 <tr className="border-b border-slate-800 text-xs font-semibold text-slate-450 uppercase tracking-wider">
@@ -438,6 +476,44 @@ export default function PenjualanClient({ products, initialInvoices }: Props) {
                 ))}
               </tbody>
             </table>
+            {/* Visual Pagination Footer */}
+            {(() => {
+              const hasPrevious = currentPage > 1;
+              if (!hasPrevious && !hasMore) return null;
+
+              const handlePageChange = (page: number) => {
+                const params = new URLSearchParams(searchParams.toString());
+                params.set('page', page.toString());
+                startTransition(() => {
+                  router.push(`${pathname}?${params.toString()}`);
+                });
+              };
+
+              return (
+                <div className="flex items-center justify-between gap-4 bg-slate-950/30 p-4 border border-slate-855 rounded-2xl backdrop-blur-md mt-6">
+                  <button
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={!hasPrevious || isPending}
+                    className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-950 border border-slate-800 text-slate-450 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-900/50 transition-all duration-150 active:scale-[0.98]"
+                  >
+                    Sebelumnya
+                  </button>
+
+                  <span className="text-xs text-slate-400 font-bold font-sans">
+                    Halaman {currentPage}
+                  </span>
+
+                  <button
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={!hasMore || isPending}
+                    className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-950 border border-slate-800 text-slate-455 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-900/50 transition-all duration-150 active:scale-[0.98]"
+                  >
+                    Selanjutnya
+                  </button>
+                </div>
+              );
+            })()}
+            </>
           )}
         </div>
       )}

@@ -1,37 +1,48 @@
 import React from 'react';
 import { createClient } from '@/utils/supabase/server';
-import { redirect } from 'next/navigation';
 import StokClient from '@/components/StokClient';
-import { StokLog, Produk } from '@/types/database';
+import { Produk } from '@/types/database';
 
-export default async function StokPage() {
+interface PageProps {
+  searchParams: Promise<{
+    page?: string;
+  }>;
+}
+
+export default async function StokPage({ searchParams }: PageProps) {
   const supabase = await createClient();
 
-  // Retrieve user session
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) {
-    redirect('/login');
-  }
+  const params = await searchParams;
+  const page = Number(params.page || '1');
+  const ITEMS_PER_PAGE = 10;
+  const from = (page - 1) * ITEMS_PER_PAGE;
+  const to = from + ITEMS_PER_PAGE; // Fetch 11 items to check for Next page
 
-  // Fetch stock logs and products in parallel to avoid database query waterfalls
+  // Auth is handled by layout.tsx — fetch data immediately without waiting for auth
   const [logsResult, productsResult] = await Promise.all([
     supabase
       .from('stok_log')
       .select('*, produk(nama), profiles(full_name)')
-      .order('created_at', { ascending: false }),
+      .order('created_at', { ascending: false })
+      .range(from, to),
     supabase
       .from('produk')
-      .select('*')
+      .select('id, nama, stok_saat_ini')
       .order('nama', { ascending: true })
+      .limit(12)
   ]);
 
-  const logs = logsResult.data;
+  const rawLogs = logsResult.data || [];
+  const hasMore = rawLogs.length > ITEMS_PER_PAGE;
+  const logs = hasMore ? rawLogs.slice(0, ITEMS_PER_PAGE) : rawLogs;
   const products = productsResult.data;
 
   return (
     <StokClient
       initialLogs={(logs as any[]) || []}
       products={(products as Produk[]) || []}
+      hasMore={hasMore}
+      currentPage={page}
     />
   );
 }

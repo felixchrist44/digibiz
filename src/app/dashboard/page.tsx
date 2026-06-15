@@ -1,5 +1,6 @@
 import React from 'react';
 import { createClient } from '@/utils/supabase/server';
+import { getAuthenticatedUser } from '@/utils/supabase/auth';
 import Link from 'next/link';
 import {
   TrendingUp,
@@ -12,37 +13,50 @@ import {
 } from 'lucide-react';
 import { Produk, Penjualan } from '@/types/database';
 
+export interface DashboardStatsPayload {
+  totalProducts: number;
+  lowStockProductsCount: number;
+  outOfStockCount: number;
+  totalSalesCount: number;
+  totalRevenue: number;
+}
+
 export default async function DashboardPage() {
-  const supabase = await createClient();
+  // React cache() deduplicates this — layout already called it, so this is free (0ms)
+  const { profile, supabase } = await getAuthenticatedUser();
+  const isOwner = profile?.role === 'owner';
 
-  // Retrieve user
-  const { data: { user } } = await supabase.auth.getUser();
-
-  // Fetch user profile role, products, and sales in parallel to avoid database query waterfalls
-  const [profileResult, produkResult, penjualanResult] = await Promise.all([
-    user
-      ? supabase.from('profiles').select('role').eq('id', user.id).single()
-      : Promise.resolve({ data: null, error: null }),
-    supabase.from('produk').select('*').order('created_at', { ascending: false }),
-    supabase.from('penjualan').select('*').order('created_at', { ascending: false })
+  // Fetch all dashboard data in parallel — no auth blocking
+  const [
+    cacheResult,
+    lowStockProductsRes,
+    recentSalesRes,
+  ] = await Promise.all([
+    supabase.from('dashboard_stats_cache').select('*').single(),
+    supabase
+      .from('produk')
+      .select('id, nama, kode_produk, stok_saat_ini')
+      .lte('stok_saat_ini', 5),
+    supabase
+      .from('penjualan')
+      .select('id, nomor_invoice, total_harga, created_at')
+      .order('created_at', { ascending: false })
+      .limit(7),
   ]);
 
-  let role: 'owner' | 'staff' = 'staff';
-  if (profileResult?.data) {
-    role = profileResult.data.role as 'owner' | 'staff';
-  }
-  const isOwner = role === 'owner';
+  const cache = cacheResult?.data;
 
-  const products = (produkResult.data as Produk[]) || [];
-  const sales = (penjualanResult.data as Penjualan[]) || [];
+  // Populate structured dashboard aggregations payload from stats cache
+  const stats: DashboardStatsPayload = {
+    totalProducts: cache?.total_products || 0,
+    lowStockProductsCount: cache?.low_stock_count || 0,
+    outOfStockCount: cache?.out_of_stock_count || 0,
+    totalSalesCount: cache?.total_sales_count || 0,
+    totalRevenue: Number(cache?.total_revenue || 0)
+  };
 
-  // Calculations
-  const totalProducts = products.length;
-  const lowStockProducts = products.filter(p => p.stok_saat_ini <= 5);
-  const outOfStockCount = products.filter(p => p.stok_saat_ini === 0).length;
-
-  const totalRevenue = sales.reduce((sum, item) => sum + Number(item.total_harga), 0);
-  const totalSalesCount = sales.length;
+  const lowStockProducts = (lowStockProductsRes.data as Produk[]) || [];
+  const recentSales = (recentSalesRes.data as Penjualan[]) || [];
 
   // Format currency Helper
   const formatIDR = (value: number) => {
@@ -53,10 +67,9 @@ export default async function DashboardPage() {
     }).format(value);
   };
 
-  // Process Sales Data for Custom Chart (Last 7 sales or days)
-  // We can group sales by day or just show the last 7 invoices for visualization.
+  // Process Sales Data for Custom Chart (Last 7 sales)
   const chartHeightMax = 160; // in pixels
-  const recentInvoicesForChart = sales.slice(0, 7).reverse();
+  const recentInvoicesForChart = [...recentSales].reverse();
   const maxInvoiceValue = Math.max(...recentInvoicesForChart.map(s => Number(s.total_harga)), 100000);
 
   return (
@@ -92,8 +105,8 @@ export default async function DashboardPage() {
         {/* Total Revenue */}
         <div className="bg-slate-900/40 backdrop-blur border border-slate-800/80 rounded-2xl p-6 hover:border-slate-700/60 transition-all duration-200 shadow-xl flex items-center justify-between">
           <div className="space-y-2">
-            <span className="text-xs font-semibold text-slate-450 uppercase tracking-wider">Total Pendapatan</span>
-            <p className="text-2xl font-bold text-white tracking-tight">{formatIDR(totalRevenue)}</p>
+            <span className="text-xs font-semibold text-slate-455 uppercase tracking-wider">Total Pendapatan</span>
+            <p className="text-2xl font-bold text-white tracking-tight">{formatIDR(stats.totalRevenue)}</p>
           </div>
           <div className="h-12 w-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
             <CircleDollarSign className="h-6 w-6" />
@@ -103,8 +116,8 @@ export default async function DashboardPage() {
         {/* Total Sales Invoices */}
         <div className="bg-slate-900/40 backdrop-blur border border-slate-800/80 rounded-2xl p-6 hover:border-slate-700/60 transition-all duration-200 shadow-xl flex items-center justify-between">
           <div className="space-y-2">
-            <span className="text-xs font-semibold text-slate-450 uppercase tracking-wider">Total Penjualan</span>
-            <p className="text-2xl font-bold text-white tracking-tight">{totalSalesCount} Transaksi</p>
+            <span className="text-xs font-semibold text-slate-455 uppercase tracking-wider">Total Penjualan</span>
+            <p className="text-2xl font-bold text-white tracking-tight">{stats.totalSalesCount} Transaksi</p>
           </div>
           <div className="h-12 w-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
             <TrendingUp className="h-6 w-6" />
@@ -114,8 +127,8 @@ export default async function DashboardPage() {
         {/* Total Products */}
         <div className="bg-slate-900/40 backdrop-blur border border-slate-800/80 rounded-2xl p-6 hover:border-slate-700/60 transition-all duration-200 shadow-xl flex items-center justify-between">
           <div className="space-y-2">
-            <span className="text-xs font-semibold text-slate-450 uppercase tracking-wider">Daftar Produk</span>
-            <p className="text-2xl font-bold text-white tracking-tight">{totalProducts} Item</p>
+            <span className="text-xs font-semibold text-slate-455 uppercase tracking-wider">Daftar Produk</span>
+            <p className="text-2xl font-bold text-white tracking-tight">{stats.totalProducts} Item</p>
           </div>
           <div className="h-12 w-12 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
             <Package className="h-6 w-6" />
@@ -125,15 +138,15 @@ export default async function DashboardPage() {
         {/* Low Stock Alert Count */}
         <div className="bg-slate-900/40 backdrop-blur border border-slate-800/80 rounded-2xl p-6 hover:border-slate-700/60 transition-all duration-200 shadow-xl flex items-center justify-between">
           <div className="space-y-2">
-            <span className="text-xs font-semibold text-slate-450 uppercase tracking-wider">Stok Menipis / Habis</span>
+            <span className="text-xs font-semibold text-slate-455 uppercase tracking-wider">Stok Menipis / Habis</span>
             <p className="text-2xl font-bold text-white tracking-tight">
-              {lowStockProducts.length} <span className="text-xs font-normal text-slate-400">({outOfStockCount} Habis)</span>
+              {stats.lowStockProductsCount} <span className="text-xs font-normal text-slate-400">({stats.outOfStockCount} Habis)</span>
             </p>
           </div>
           <div className={`h-12 w-12 rounded-xl flex items-center justify-center ${
-            lowStockProducts.length > 0
+            stats.lowStockProductsCount > 0
               ? 'bg-amber-500/10 border border-amber-500/20 text-amber-400 animate-pulse'
-              : 'bg-slate-800/50 border border-slate-850 text-slate-450'
+              : 'bg-slate-800/50 border border-slate-800 text-slate-400'
           }`}>
             <AlertTriangle className="h-6 w-6" />
           </div>
@@ -162,7 +175,7 @@ export default async function DashboardPage() {
             <div className="space-y-4">
               {/* Graphic Columns */}
               <div className="h-[200px] flex items-end justify-between gap-3 pt-6 px-2">
-                {recentInvoicesForChart.map((s, idx) => {
+                {recentInvoicesForChart.map((s) => {
                   const invoiceVal = Number(s.total_harga);
                   // Calculate height percent
                   const heightPercent = `${Math.max((invoiceVal / maxInvoiceValue) * chartHeightMax, 15)}px`;
@@ -177,7 +190,7 @@ export default async function DashboardPage() {
                         style={{ height: heightPercent }}
                         className="w-full max-w-[40px] bg-gradient-to-t from-indigo-650 to-indigo-500 hover:from-indigo-550 hover:to-indigo-450 rounded-lg shadow-lg hover:shadow-indigo-500/20 transition-all duration-300"
                       />
-                      <span className="text-[10px] font-bold text-slate-450 mt-2 truncate w-full text-center">
+                      <span className="text-[10px] font-bold text-slate-455 mt-2 truncate w-full text-center">
                         #{s.nomor_invoice.slice(-4)}
                       </span>
                     </div>
@@ -249,22 +262,22 @@ export default async function DashboardPage() {
         </div>
 
         <div className="overflow-x-auto">
-          {sales.length === 0 ? (
+          {recentSales.length === 0 ? (
             <div className="py-12 text-center text-slate-500">
               Belum ada pencatatan transaksi penjualan.
             </div>
           ) : (
             <table className="w-full text-left border-collapse min-w-[500px]">
               <thead>
-                <tr className="border-b border-slate-800 text-xs font-semibold text-slate-450 uppercase tracking-wider">
+                <tr className="border-b border-slate-800 text-xs font-semibold text-slate-455 uppercase tracking-wider">
                   <th className="pb-3 font-semibold">Nomor Invoice</th>
                   <th className="pb-3 font-semibold">Tanggal</th>
                   <th className="pb-3 font-semibold">Jumlah Total</th>
                   <th className="pb-3 text-right font-semibold">Aksi</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-850/50 text-sm text-slate-300">
-                {sales.slice(0, 5).map(sale => (
+              <tbody className="divide-y divide-slate-855/50 text-sm text-slate-300">
+                {recentSales.slice(0, 5).map(sale => (
                   <tr key={sale.id} className="hover:bg-slate-900/20 transition-colors duration-100">
                     <td className="py-4 font-semibold text-white">{sale.nomor_invoice}</td>
                     <td className="py-4 text-slate-400">

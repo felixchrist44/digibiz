@@ -24,6 +24,7 @@ import {
   Clock,
   Check
 } from 'lucide-react';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { Produk, Profile } from '@/types/database';
 import BarcodeGenerator from '@/components/BarcodeGenerator';
 
@@ -45,13 +46,60 @@ interface ScannedBarcode {
 interface Props {
   initialProducts: Produk[];
   profile: Profile;
+  hasMore: boolean;
+  currentPage: number;
 }
 
-export default function ProdukClient({ initialProducts, profile }: Props) {
+export default function ProdukClient({
+  initialProducts,
+  profile,
+  hasMore,
+  currentPage
+}: Props) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+
   const [products, setProducts] = useState<Produk[]>(initialProducts);
-  const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<'all' | 'out' | 'low' | 'available'>('all');
+  const [searchInput, setSearchInput] = useState(searchParams.get('search') || '');
+  const [filter, setFilter] = useState<'all' | 'out' | 'low' | 'available'>(
+    (searchParams.get('filter') as 'all' | 'out' | 'low' | 'available') || 'all'
+  );
   const [isPending, startTransition] = useTransition();
+
+  // Sync products state when initialProducts prop changes on server updates
+  useEffect(() => {
+    setProducts(initialProducts);
+  }, [initialProducts]);
+
+  // Sync search/filter inputs when URL changes (e.g., from browser back button)
+  useEffect(() => {
+    setSearchInput(searchParams.get('search') || '');
+    setFilter((searchParams.get('filter') as 'all' | 'out' | 'low' | 'available') || 'all');
+  }, [searchParams]);
+
+  const handleSearchSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const params = new URLSearchParams(searchParams.toString());
+    const trimmedSearch = searchInput.trim();
+    if (trimmedSearch) {
+      params.set('search', trimmedSearch);
+    } else {
+      params.delete('search');
+    }
+    params.set('page', '1'); // Reset to page 1 on new search
+    startTransition(() => {
+      router.push(`${pathname}?${params.toString()}`);
+    });
+  };
+
+  const handlePageChange = (page: number) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('page', page.toString());
+    startTransition(() => {
+      router.push(`${pathname}?${params.toString()}`);
+    });
+  };
 
   // Modals state
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -268,19 +316,8 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
     return { subtotal: sub, ppn: tax, grandTotal: total };
   }, [cart, includeTax]);
 
-  // Search & Filter logic
-  const filteredProducts = products.filter(p => {
-    const matchesSearch =
-      p.nama.toLowerCase().includes(search.toLowerCase()) ||
-      p.kode_produk.toLowerCase().includes(search.toLowerCase());
-
-    if (!matchesSearch) return false;
-
-    if (filter === 'out') return p.stok_saat_ini === 0;
-    if (filter === 'low') return p.stok_saat_ini > 0 && p.stok_saat_ini <= 5;
-    if (filter === 'available') return p.stok_saat_ini > 5;
-    return true;
-  });
+  // Search & Filter logic is driven by server-side pagination
+  const filteredProducts = products;
 
   // Handle image file selection preview helper
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -307,10 +344,7 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
         setErrorMessage(res.error);
       } else {
         setSuccessMessage('Produk berhasil ditambahkan.');
-        // Refresh products list from Supabase locally
-        const supabase = createClient();
-        const { data } = await supabase.from('produk').select('*').order('created_at', { ascending: false });
-        if (data) setProducts(data as Produk[]);
+        router.refresh();
         setTimeout(() => {
           setIsAddOpen(false);
           setSuccessMessage(null);
@@ -335,9 +369,7 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
         setErrorMessage(res.error);
       } else {
         setSuccessMessage('Produk berhasil diperbarui.');
-        const supabase = createClient();
-        const { data } = await supabase.from('produk').select('*').order('created_at', { ascending: false });
-        if (data) setProducts(data as Produk[]);
+        router.refresh();
         setTimeout(() => {
           setIsEditOpen(false);
           setSuccessMessage(null);
@@ -355,9 +387,7 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
     if (res?.error) {
       alert(res.error);
     } else {
-      const supabase = createClient();
-      const { data } = await supabase.from('produk').select('*').order('created_at', { ascending: false });
-      if (data) setProducts(data as Produk[]);
+      router.refresh();
     }
   };
 
@@ -647,24 +677,46 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
         <>
           {/* Filters & Search Toolbar */}
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4 bg-slate-900/30 p-4 border border-slate-855 rounded-2xl backdrop-blur-md">
-            {/* Search */}
-            <div className="relative md:col-span-2">
-              <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-450" />
-              <input
-                type="text"
-                placeholder="Cari produk berdasarkan nama atau kode..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-full pl-10 pr-4 py-2.5 bg-slate-950/40 border border-slate-800 rounded-xl text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
-              />
-            </div>
+            {/* Search Form */}
+            <form onSubmit={handleSearchSubmit} className="relative md:col-span-2 flex gap-2">
+              <div className="relative flex-1">
+                {isPending ? (
+                  <Loader2 className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-indigo-450 animate-spin" />
+                ) : (
+                  <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-450" />
+                )}
+                <input
+                  type="text"
+                  placeholder="Cari produk berdasarkan nama atau kode..."
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  className="w-full pl-10 pr-4 py-2.5 bg-slate-950/40 border border-slate-800 rounded-xl text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={isPending}
+                className="px-4 py-2.5 bg-indigo-650 hover:bg-indigo-755 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-sm font-semibold transition-all active:scale-[0.98] flex items-center gap-1.5 shadow-md shadow-indigo-650/20 shrink-0"
+              >
+                Cari
+              </button>
+            </form>
 
             {/* Filter stock status */}
             <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-450 font-medium whitespace-nowrap">Filter Stok:</span>
+              <span className="text-xs text-slate-455 font-medium whitespace-nowrap">Filter Stok:</span>
               <select
                 value={filter}
-                onChange={(e: any) => setFilter(e.target.value)}
+                onChange={(e: any) => {
+                  const val = e.target.value;
+                  setFilter(val);
+                  const params = new URLSearchParams(searchParams.toString());
+                  params.set('filter', val);
+                  params.set('page', '1'); // Reset to page 1 on filter change
+                  startTransition(() => {
+                    router.push(`${pathname}?${params.toString()}`);
+                  });
+                }}
                 className="w-full px-3 py-2.5 bg-slate-950/40 border border-slate-800 rounded-xl text-slate-350 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
               >
                 <option value="all">Semua Produk</option>
@@ -675,13 +727,13 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
             </div>
 
             <div className="flex items-center justify-end text-xs text-slate-455 font-medium px-1">
-              Menampilkan {filteredProducts.length} dari {products.length} produk
+              Menampilkan {products.length} produk (Halaman {currentPage})
             </div>
           </div>
 
           {/* Remodeled Product List: Wide, Compact Horizontal Rows */}
           {filteredProducts.length === 0 ? (
-            <div className="py-20 text-center bg-slate-900/10 border border-dashed border-slate-855 rounded-2xl flex flex-col items-center">
+            <div className={`py-20 text-center bg-slate-900/10 border border-dashed border-slate-855 rounded-2xl flex flex-col items-center transition-all duration-200 ${isPending ? 'opacity-50 pointer-events-none' : ''}`}>
               <Package className="h-12 w-12 text-slate-650 mb-3" />
               <p className="text-base font-bold text-slate-350">Tidak Ada Produk Ditemukan</p>
               <p className="text-xs text-slate-500 mt-1 max-w-[280px]">
@@ -689,7 +741,7 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
               </p>
             </div>
           ) : (
-            <div className="flex flex-col gap-4 w-full">
+            <div className={`flex flex-col gap-4 w-full transition-all duration-200 ${isPending ? 'opacity-50 pointer-events-none' : ''}`}>
               {filteredProducts.map((p) => {
             const isLow = p.stok_saat_ini <= 5;
             const isOut = p.stok_saat_ini === 0;
@@ -800,7 +852,37 @@ export default function ProdukClient({ initialProducts, profile }: Props) {
           })}
         </div>
       )}
-      </>
+          
+          {/* Visual Pagination Footer */}
+          {(() => {
+            const hasPrevious = currentPage > 1;
+            if (!hasPrevious && !hasMore) return null;
+
+            return (
+              <div className="flex items-center justify-between gap-4 bg-slate-900/30 p-4 border border-slate-855 rounded-2xl backdrop-blur-md mt-6">
+                <button
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  disabled={!hasPrevious || isPending}
+                  className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-950 border border-slate-800 text-slate-400 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-900/50 transition-all duration-150 active:scale-[0.98]"
+                >
+                  Sebelumnya
+                </button>
+
+                <span className="text-xs text-slate-400 font-bold font-sans">
+                  Halaman {currentPage}
+                </span>
+
+                <button
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={!hasMore || isPending}
+                  className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-950 border border-slate-800 text-slate-400 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-900/50 transition-all duration-150 active:scale-[0.98]"
+                >
+                  Selanjutnya
+                </button>
+              </div>
+            );
+          })()}
+        </>
       )}
 
       {/* ==================== ADD PRODUCT MODAL ==================== */}
