@@ -17,38 +17,26 @@ export async function adjustStok(formData: FormData) {
     return { error: 'Semua kolom wajib diisi dengan benar. Jumlah harus lebih dari 0.' };
   }
 
-  // Double check product existence and current stock before reduction
-  if (tipe === 'keluar') {
-    const { data: product, error: fetchError } = await supabase
-      .from('produk')
-      .select('stok_saat_ini, nama')
-      .eq('id', produk_id)
-      .single();
+  try {
+    const { error: txError } = await supabase.rpc('adjust_stock_manual', {
+      p_produk_id: produk_id,
+      p_tipe: tipe,
+      p_jumlah: jumlah,
+      p_keterangan: keterangan || 'Penyesuaian stok manual',
+      p_dibuat_oleh: user.id
+    });
 
-    if (fetchError || !product) {
-      return { error: 'Produk tidak ditemukan.' };
+    if (txError) {
+      return { error: `Gagal menyesuaikan stok: ${txError.message}` };
     }
 
-    if (product.stok_saat_ini < jumlah) {
-      return { error: `Stok tidak mencukupi. Stok saat ini untuk "${product.nama}" adalah ${product.stok_saat_ini} Pcs.` };
-    }
+    revalidatePath('/dashboard/stok');
+    revalidatePath('/dashboard/produk');
+    revalidatePath('/dashboard');
+
+    return { success: true };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    return { error: errorMessage || 'Terjadi kesalahan sistem saat memproses transaksi.' };
   }
-
-  // Insert log
-  const { error } = await supabase.from('stok_log').insert({
-    produk_id,
-    tipe,
-    jumlah,
-    keterangan: keterangan || 'Penyesuaian stok manual',
-    dibuat_oleh: user.id
-  });
-
-  if (error) {
-    return { error: error.message };
-  }
-
-  revalidatePath('/dashboard/stok');
-  revalidatePath('/dashboard/produk');
-  revalidatePath('/dashboard');
-  return { success: true };
 }

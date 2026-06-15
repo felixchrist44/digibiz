@@ -8,16 +8,13 @@ import {
   DollarSign,
   PieChart,
   Package,
-  Clock,
   Loader2,
   X,
   ChevronRight,
   TrendingUp,
   BarChart3,
   Archive,
-  Info,
-  CheckCircle,
-  Printer
+  Info
 } from 'lucide-react';
 
 interface SummaryItem {
@@ -40,6 +37,69 @@ interface Props {
 type FilterRange = 'all' | 'today' | '7days' | '30days' | 'month';
 type ActiveTab = 'date' | 'product';
 
+interface DrillDownInvoice {
+  id: string;
+  nomor_invoice: string;
+  created_at: string;
+  total_harga: number;
+  profiles: {
+    full_name: string | null;
+  }[] | {
+    full_name: string | null;
+  } | null;
+  detail_penjualan: {
+    id: string;
+    harga_satuan: number;
+    jumlah: number;
+    subtotal: number;
+    produk: {
+      nama: string;
+      kode_produk: string;
+      harga_modal: number;
+    }[] | {
+      nama: string;
+      kode_produk: string;
+      harga_modal: number;
+    } | null;
+  }[] | null;
+}
+
+interface PaginationControlsProps {
+  currentPage: number;
+  hasMore: boolean;
+  isPending: boolean;
+  onPageChange: (page: number) => void;
+}
+
+const PaginationControls = ({ currentPage, hasMore, isPending, onPageChange }: PaginationControlsProps) => {
+  const hasPrevious = currentPage > 1;
+  if (!hasPrevious && !hasMore) return null;
+
+  return (
+    <div className="flex items-center justify-between gap-4 bg-slate-950/30 p-4 border border-slate-855 rounded-2xl backdrop-blur-md mt-6">
+      <button
+        onClick={() => onPageChange(currentPage - 1)}
+        disabled={!hasPrevious || isPending}
+        className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-950 border border-slate-800 text-slate-450 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-900/50 transition-all duration-150 active:scale-[0.98]"
+      >
+        Sebelumnya
+      </button>
+
+      <span className="text-xs text-slate-400 font-bold font-sans">
+        Halaman {currentPage}
+      </span>
+
+      <button
+        onClick={() => onPageChange(currentPage + 1)}
+        disabled={!hasMore || isPending}
+        className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-950 border border-slate-800 text-slate-455 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-900/50 transition-all duration-150 active:scale-[0.98]"
+      >
+        Selanjutnya
+      </button>
+    </div>
+  );
+};
+
 export default function LaporanClient({
   initialSummary,
   activeRange,
@@ -56,7 +116,7 @@ export default function LaporanClient({
   // Drill-down states
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [drillDownLoading, setDrillDownLoading] = useState(false);
-  const [drillDownData, setDrillDownData] = useState<any[]>([]);
+  const [drillDownData, setDrillDownData] = useState<DrillDownInvoice[]>([]);
 
   // Format currency helper
   const formatIDR = (value: number) => {
@@ -94,11 +154,16 @@ export default function LaporanClient({
     const datesGroup: Record<string, { omset: number; profit: number; volume: number; rawDate: string }> = {};
 
     initialSummary.forEach(item => {
-      const dateKey = new Date(item.tanggal).toLocaleDateString('id-ID', {
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric'
-      });
+      const dateKey = activeRange === 'all'
+        ? new Date(item.tanggal).toLocaleDateString('id-ID', {
+            month: 'long',
+            year: 'numeric'
+          })
+        : new Date(item.tanggal).toLocaleDateString('id-ID', {
+            day: 'numeric',
+            month: 'short',
+            year: 'numeric'
+          });
 
       if (!datesGroup[dateKey]) {
         datesGroup[dateKey] = { omset: 0, profit: 0, volume: 0, rawDate: item.tanggal };
@@ -210,35 +275,7 @@ export default function LaporanClient({
     }
   };
 
-  // Reusable Pagination Component
-  const PaginationControls = () => {
-    const hasPrevious = currentPage > 1;
-    if (!hasPrevious && !hasMore) return null;
 
-    return (
-      <div className="flex items-center justify-between gap-4 bg-slate-950/30 p-4 border border-slate-855 rounded-2xl backdrop-blur-md mt-6">
-        <button
-          onClick={() => handlePageChange(currentPage - 1)}
-          disabled={!hasPrevious || isPending}
-          className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-950 border border-slate-800 text-slate-450 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-900/50 transition-all duration-150 active:scale-[0.98]"
-        >
-          Sebelumnya
-        </button>
-
-        <span className="text-xs text-slate-400 font-bold font-sans">
-          Halaman {currentPage}
-        </span>
-
-        <button
-          onClick={() => handlePageChange(currentPage + 1)}
-          disabled={!hasMore || isPending}
-          className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-950 border border-slate-800 text-slate-455 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed hover:bg-slate-900/50 transition-all duration-150 active:scale-[0.98]"
-        >
-          Selanjutnya
-        </button>
-      </div>
-    );
-  };
 
   return (
     <div className="space-y-8">
@@ -346,30 +383,32 @@ export default function LaporanClient({
       <div className="space-y-6">
         
         {/* Navigation Tabs */}
-        <div className="flex bg-slate-900/80 border border-slate-850 p-1 rounded-2xl max-w-[320px]">
-          {(
-            [
-              { id: 'date', label: 'Ringkasan Tanggal', icon: Calendar },
-              { id: 'product', label: 'Rincian Produk', icon: Archive }
-            ] as const
-          ).map(tab => {
-            const TabIcon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
-                  activeTab === tab.id
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <TabIcon className="h-3.5 w-3.5" />
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
+        {activeRange !== 'all' && (
+          <div className="flex bg-slate-900/80 border border-slate-850 p-1 rounded-2xl max-w-[320px]">
+            {(
+              [
+                { id: 'date', label: 'Ringkasan Tanggal', icon: Calendar },
+                { id: 'product', label: 'Rincian Produk', icon: Archive }
+              ] as const
+            ).map(tab => {
+              const TabIcon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2 text-xs font-bold rounded-xl transition-all cursor-pointer ${
+                    activeTab === tab.id
+                      ? 'bg-indigo-600 text-white shadow-md'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <TabIcon className="h-3.5 w-3.5" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
 
         {/* Display Tab Content */}
         <div className={`bg-slate-900/40 border border-slate-800/80 backdrop-blur rounded-3xl p-6 shadow-xl min-h-[400px] transition-opacity duration-200 ${isPending ? 'opacity-50 pointer-events-none' : ''}`}>
@@ -386,12 +425,12 @@ export default function LaporanClient({
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="border-b border-slate-800 text-[10px] font-bold text-slate-500 uppercase tracking-widest bg-slate-950/20">
-                        <th className="py-4 px-5">Tanggal</th>
+                        <th className="py-4 px-5">{activeRange === 'all' ? 'Bulan' : 'Tanggal'}</th>
                         <th className="py-4 px-5 text-center">Volume Terjual</th>
                         <th className="py-4 px-5 text-right">Omset Kotor</th>
                         <th className="py-4 px-5 text-right">Laba Bersih</th>
                         <th className="py-4 px-5 text-center">Margin</th>
-                        <th className="py-4 px-5 text-right">Aksi</th>
+                        {activeRange !== 'all' && <th className="py-4 px-5 text-right">Aksi</th>}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-850/60 text-xs text-slate-300">
@@ -406,20 +445,22 @@ export default function LaporanClient({
                               {row.margin.toFixed(1)}%
                             </span>
                           </td>
-                          <td className="py-4 px-5 text-right">
-                            <button
-                              onClick={() => handleViewDateDetails(row.rawDate, row.dateLabel)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-950/40 border border-slate-800 hover:border-slate-750 text-slate-400 hover:text-white rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer"
-                            >
-                              Rincian Hari
-                              <ChevronRight className="h-3 w-3 text-indigo-400" />
-                            </button>
-                          </td>
+                          {activeRange !== 'all' && (
+                            <td className="py-4 px-5 text-right">
+                              <button
+                                onClick={() => handleViewDateDetails(row.rawDate, row.dateLabel)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-950/40 border border-slate-800 hover:border-slate-750 text-slate-400 hover:text-white rounded-lg text-[10px] font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                              >
+                                Rincian Hari
+                                <ChevronRight className="h-3 w-3 text-indigo-400" />
+                              </button>
+                            </td>
+                          )}
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                  <PaginationControls />
+                  <PaginationControls currentPage={currentPage} hasMore={hasMore} isPending={isPending} onPageChange={handlePageChange} />
                 </>
               )}
             </div>
@@ -462,7 +503,7 @@ export default function LaporanClient({
                       ))}
                     </tbody>
                   </table>
-                  <PaginationControls />
+                  <PaginationControls currentPage={currentPage} hasMore={hasMore} isPending={isPending} onPageChange={handlePageChange} />
                 </>
               )}
             </div>
@@ -519,8 +560,8 @@ export default function LaporanClient({
                               Pukul {new Date(inv.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
                             </span>
                           </div>
-                          <div className="text-slate-450 font-medium">
-                            Operator: <span className="font-bold text-slate-300">{inv.profiles?.full_name || 'Kasir'}</span>
+                          <div className="text-slate-455 font-medium">
+                            Operator: <span className="font-bold text-slate-300">{(Array.isArray(inv.profiles) ? inv.profiles[0]?.full_name : inv.profiles?.full_name) || 'Kasir'}</span>
                           </div>
                         </div>
 
@@ -528,9 +569,10 @@ export default function LaporanClient({
                         <div className="space-y-2">
                           <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">Item Terjual</span>
                           <div className="space-y-2">
-                            {inv.detail_penjualan?.map((item: any) => {
+                            {inv.detail_penjualan?.map((item) => {
                               const sellPrice = Number(item.harga_satuan || 0);
-                              const modalCost = Number(item.produk?.harga_modal || 0);
+                              const productObj = Array.isArray(item.produk) ? item.produk[0] : item.produk;
+                              const modalCost = Number(productObj?.harga_modal || 0);
                               const profitRow = (sellPrice - modalCost) * item.jumlah;
 
                               return (
@@ -539,9 +581,9 @@ export default function LaporanClient({
                                   className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-xl bg-slate-900/40 border border-slate-850/50 text-xs gap-2"
                                 >
                                   <div className="min-w-0">
-                                    <p className="font-bold text-white truncate">{item.produk?.nama || 'Produk Dihapus'}</p>
+                                    <p className="font-bold text-white truncate">{productObj?.nama || 'Produk Dihapus'}</p>
                                     <p className="text-[10px] text-slate-500 font-mono mt-0.5">
-                                      SKU: {item.produk?.kode_produk || 'N/A'}
+                                      SKU: {productObj?.kode_produk || 'N/A'}
                                     </p>
                                   </div>
                                   <div className="flex items-center gap-6 text-right self-end sm:self-auto shrink-0">
@@ -566,10 +608,11 @@ export default function LaporanClient({
                           <div className="flex items-center gap-2">
                             <span className="text-slate-450 font-semibold">Laba Invoice:</span>
                             <span className="font-black text-emerald-400">
-                              {formatIDR(inv.detail_penjualan?.reduce((sum: number, it: any) => {
-                                const cost = Number(it.produk?.harga_modal || 0);
-                                return sum + (Number(it.harga_satuan) - cost) * it.jumlah;
-                              }, 0) || 0)}
+                                {formatIDR(inv.detail_penjualan?.reduce((sum: number, it) => {
+                                  const productObj = Array.isArray(it.produk) ? it.produk[0] : it.produk;
+                                  const cost = Number(productObj?.harga_modal || 0);
+                                  return sum + (Number(it.harga_satuan) - cost) * it.jumlah;
+                                }, 0) || 0)}
                             </span>
                           </div>
                           <div className="flex items-center gap-2">

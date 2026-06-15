@@ -18,8 +18,6 @@ import {
   ShoppingCart,
   Wifi,
   Minus,
-  Tv,
-  Zap,
   Loader2,
   Clock,
   Check
@@ -60,23 +58,27 @@ export default function ProdukClient({
   const searchParams = useSearchParams();
   const pathname = usePathname();
 
-  const [products, setProducts] = useState<Produk[]>(initialProducts);
   const [searchInput, setSearchInput] = useState(searchParams.get('search') || '');
   const [filter, setFilter] = useState<'all' | 'out' | 'low' | 'available'>(
     (searchParams.get('filter') as 'all' | 'out' | 'low' | 'available') || 'all'
   );
   const [isPending, startTransition] = useTransition();
 
-  // Sync products state when initialProducts prop changes on server updates
-  useEffect(() => {
-    setProducts(initialProducts);
-  }, [initialProducts]);
+  // Sync search/filter inputs when URL changes (e.g., from browser back button) using render-phase updates to avoid React 19 useEffect warnings
+  const currentSearch = searchParams.get('search') || '';
+  const currentFilter = (searchParams.get('filter') as 'all' | 'out' | 'low' | 'available') || 'all';
 
-  // Sync search/filter inputs when URL changes (e.g., from browser back button)
-  useEffect(() => {
-    setSearchInput(searchParams.get('search') || '');
-    setFilter((searchParams.get('filter') as 'all' | 'out' | 'low' | 'available') || 'all');
-  }, [searchParams]);
+  const [prevSearch, setPrevSearch] = useState(currentSearch);
+  const [prevFilter, setPrevFilter] = useState(currentFilter);
+
+  if (currentSearch !== prevSearch) {
+    setPrevSearch(currentSearch);
+    setSearchInput(currentSearch);
+  }
+  if (currentFilter !== prevFilter) {
+    setPrevFilter(currentFilter);
+    setFilter(currentFilter);
+  }
 
   const handleSearchSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -125,14 +127,13 @@ export default function ProdukClient({
   const [scannedList, setScannedList] = useState<ScannedBarcode[]>([]);
   const [socketStatus, setSocketStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
   const [posSuccessMsg, setPosSuccessMsg] = useState<string | null>(null);
-  const [posErrorMsg, setPosErrorMsg] = useState<string | null>(null);
   const [includeTax, setIncludeTax] = useState(true);
 
   // Web Audio synth beep
   const playBeep = () => {
     if (typeof window === 'undefined') return;
     try {
-      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!AudioContextClass) return;
       const ctx = new AudioContextClass();
       const osc = ctx.createOscillator();
@@ -154,7 +155,7 @@ export default function ProdukClient({
     }
   };
 
-  const handleIncomingBarcodeRef = useRef<any>(null);
+  const handleIncomingBarcodeRef = useRef<((sku: string) => Promise<void>) | null>(null);
   
   const handleIncomingBarcode = async (sku: string) => {
     const trimmedSku = sku.trim();
@@ -164,7 +165,7 @@ export default function ProdukClient({
     const timestamp = new Date().toLocaleTimeString('id-ID');
 
     // 1. Local Lookup
-    const matchedLocal = products.find(p => p.kode_produk.toLowerCase() === trimmedSku.toLowerCase());
+    const matchedLocal = initialProducts.find(p => p.kode_produk.toLowerCase() === trimmedSku.toLowerCase());
     
     if (matchedLocal) {
       const itemInfo = {
@@ -247,7 +248,6 @@ export default function ProdukClient({
   useEffect(() => {
     if (!posModeActive) return;
 
-    setSocketStatus('connecting');
     const supabase = createClient();
     const channel = supabase.channel('inventory-checkout-room', {
       config: {
@@ -297,7 +297,6 @@ export default function ProdukClient({
   const clearCart = () => {
     setCart([]);
     setPosSuccessMsg(null);
-    setPosErrorMsg(null);
   };
 
   const checkoutCart = () => {
@@ -317,7 +316,7 @@ export default function ProdukClient({
   }, [cart, includeTax]);
 
   // Search & Filter logic is driven by server-side pagination
-  const filteredProducts = products;
+  const filteredProducts = initialProducts;
 
   // Handle image file selection preview helper
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -419,13 +418,19 @@ export default function ProdukClient({
           {/* POS Mode Switcher Button */}
           <button
             onClick={() => {
-              setPosModeActive(!posModeActive);
+              const nextMode = !posModeActive;
+              setPosModeActive(nextMode);
+              if (nextMode) {
+                setSocketStatus('connecting');
+              } else {
+                setSocketStatus('disconnected');
+              }
               clearCart();
             }}
             className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-150 active:scale-[0.98] border ${
               posModeActive
                 ? 'bg-indigo-650 border-indigo-600 text-white shadow-lg shadow-indigo-650/25'
-                : 'bg-slate-900/50 border-slate-800 text-slate-300 hover:bg-slate-850 hover:text-white'
+                : 'bg-slate-900/50 border-slate-800 text-slate-300 hover:bg-slate-855 hover:text-white'
             }`}
           >
             <ShoppingCart className="h-4 w-4" />
@@ -707,8 +712,8 @@ export default function ProdukClient({
               <span className="text-xs text-slate-455 font-medium whitespace-nowrap">Filter Stok:</span>
               <select
                 value={filter}
-                onChange={(e: any) => {
-                  const val = e.target.value;
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                  const val = e.target.value as 'all' | 'out' | 'low' | 'available';
                   setFilter(val);
                   const params = new URLSearchParams(searchParams.toString());
                   params.set('filter', val);
@@ -727,7 +732,7 @@ export default function ProdukClient({
             </div>
 
             <div className="flex items-center justify-end text-xs text-slate-455 font-medium px-1">
-              Menampilkan {products.length} produk (Halaman {currentPage})
+              Menampilkan {initialProducts.length} produk (Halaman {currentPage})
             </div>
           </div>
 
@@ -756,6 +761,7 @@ export default function ProdukClient({
                   {/* Thumbnail Image from Supabase Storage */}
                   <div className="h-14 w-14 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
                     {p.gambar_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={p.gambar_url}
                         alt={p.nama}
@@ -910,6 +916,7 @@ export default function ProdukClient({
                 <div className="flex items-center gap-4">
                   <div className="h-20 w-20 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
                     {imagePreviewUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
                       <img src={imagePreviewUrl} alt="Preview" className="h-full w-full object-cover" />
                     ) : (
                       <Package className="h-8 w-8 text-slate-700" />
@@ -1060,6 +1067,7 @@ export default function ProdukClient({
                 <div className="flex items-center gap-4">
                   <div className="h-20 w-20 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
                     {imagePreviewUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
                       <img src={imagePreviewUrl} alt="Preview" className="h-full w-full object-cover" />
                     ) : (
                       <Package className="h-8 w-8 text-slate-700" />

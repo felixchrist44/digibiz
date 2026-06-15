@@ -55,5 +55,41 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  return response;
+  // Fetch the user's profile info to forward to Server Components
+  let profile = null;
+  if (user) {
+    const { data } = await supabase
+      .from('profiles')
+      .select('id, full_name, role, created_at')
+      .eq('id', user.id)
+      .single();
+    profile = data;
+  }
+
+  // Set up custom request headers to avoid duplicate database/auth checks in Server Components
+  const requestHeaders = new Headers(request.headers);
+  if (user) {
+    requestHeaders.set('x-user-id', user.id);
+    requestHeaders.set('x-user-email', user.email || '');
+    if (profile) {
+      requestHeaders.set('x-user-full-name', profile.full_name || '');
+      requestHeaders.set('x-user-role', profile.role || '');
+      requestHeaders.set('x-user-created-at', profile.created_at || '');
+    }
+  }
+
+  const finalResponse = NextResponse.next({
+    request: {
+      headers: requestHeaders,
+    },
+  });
+
+  // Transfer any set-cookie headers (auth token refresh) to finalResponse
+  if (response.headers.has('set-cookie')) {
+    response.headers.getSetCookie().forEach((cookieVal) => {
+      finalResponse.headers.append('set-cookie', cookieVal);
+    });
+  }
+
+  return finalResponse;
 }

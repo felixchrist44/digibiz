@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useMemo, useTransition } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useTransition, useSyncExternalStore } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { checkoutPenjualan } from '@/app/dashboard/penjualan/actions';
 import {
@@ -11,11 +11,8 @@ import {
   AlertTriangle,
   CheckCircle,
   RefreshCw,
-  ShoppingCart,
-  Sparkles,
   Calculator,
   CreditCard,
-  ArrowLeft,
   Printer,
   Search,
   Package,
@@ -93,7 +90,16 @@ interface ScannedItem {
   quantity: number;
 }
 
+const emptySubscribe = () => () => {};
+const getClientSnapshot = () => true;
+const getServerSnapshot = () => false;
+
 export default function CheckoutSubSection() {
+  const mounted = useSyncExternalStore(
+    emptySubscribe,
+    getClientSnapshot,
+    getServerSnapshot
+  );
   const [scannedItems, setScannedItems] = useState<ScannedItem[]>([]);
   const [manualSku, setManualSku] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -111,12 +117,25 @@ export default function CheckoutSubSection() {
     isMock: boolean;
   } | null>(null);
 
+  // Supabase client instance created once at the component level
+  const supabase = useMemo(() => createClient(), []);
+
   // Keyboard Buffer references
   const keyBufferRef = useRef<{ char: string; time: number }[]>([]);
-  const lastScannedSkuRef = useRef<string | null>(null);
+  const [lastScannedSku, setLastScannedSku] = useState<string | null>(null);
 
   // Sound feedback simulation (Flash visual effect flag)
   const [flashOnScan, setFlashOnScan] = useState(false);
+  const flashTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Clear timeout leak on unmount
+  useEffect(() => {
+    return () => {
+      if (flashTimeoutRef.current) {
+        clearTimeout(flashTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Format IDR Rupiah
   const formatIDR = (value: number) => {
@@ -135,9 +154,10 @@ export default function CheckoutSubSection() {
     setErrorMsg(null);
     setInfoMsg(null);
 
-    // Visual feedback trigger
+    // Visual feedback trigger and cleanup timeout memory leak
+    if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
     setFlashOnScan(true);
-    setTimeout(() => setFlashOnScan(false), 250);
+    flashTimeoutRef.current = setTimeout(() => setFlashOnScan(false), 250);
 
     // 1. Search in Mock Database first
     const mockProduct = MOCK_PRODUCTS.find(
@@ -147,14 +167,13 @@ export default function CheckoutSubSection() {
     if (mockProduct) {
       addItemToCart(mockProduct);
       setInfoMsg(`Terpindai (Mock): ${mockProduct.nama}`);
-      lastScannedSkuRef.current = trimmedSku;
+      setLastScannedSku(trimmedSku);
       return;
     }
 
     // 2. Fallback to Supabase Database
     setSearching(true);
     try {
-      const supabase = createClient();
       const { data, error } = await supabase
         .from('produk')
         .select('*')
@@ -170,10 +189,10 @@ export default function CheckoutSubSection() {
         } else {
           addItemToCart(dbProduct);
           setInfoMsg(`Terpindai (Database): ${dbProduct.nama}`);
-          lastScannedSkuRef.current = trimmedSku;
+          setLastScannedSku(trimmedSku);
         }
       }
-    } catch (err) {
+    } catch {
       setErrorMsg('Koneksi terganggu saat mencari barcode di server.');
     } finally {
       setSearching(false);
@@ -182,22 +201,18 @@ export default function CheckoutSubSection() {
 
   // Helper to add/update item logic in cart state
   const addItemToCart = (product: Produk) => {
+    const existing = scannedItems.find(i => i.item.id === product.id);
+    if (existing && existing.quantity >= product.stok_saat_ini) {
+      setErrorMsg(`Peringatan: Stok maksimal untuk "${product.nama}" tercapai (${product.stok_saat_ini} Pcs).`);
+      return;
+    }
     setScannedItems(prev => {
       const existingIdx = prev.findIndex(i => i.item.id === product.id);
       if (existingIdx > -1) {
-        // Increment quantity automatically
         const updated = [...prev];
-        const newQty = updated[existingIdx].quantity + 1;
-        
-        // Stock cap check
-        if (newQty > product.stok_saat_ini) {
-          setErrorMsg(`Peringatan: Stok maksimal untuk "${product.nama}" tercapai (${product.stok_saat_ini} Pcs).`);
-          return prev;
-        }
-
         updated[existingIdx] = {
           ...updated[existingIdx],
-          quantity: newQty
+          quantity: updated[existingIdx].quantity + 1
         };
         return updated;
       } else {
@@ -275,32 +290,33 @@ export default function CheckoutSubSection() {
     };
   }, []);
 
-  // Check for automatic scan URL queries on mount
+  // Check for automatic scan URL queries on mount (Hydration-safe via mounted flag)
   useEffect(() => {
+    if (!mounted) return;
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const scanSku = params.get('scan');
       if (scanSku) {
-        handleItemScanned(scanSku);
+        handleItemScannedRef.current(scanSku);
         // Clear parameter from URL to prevent duplicated scan on page refreshes
         const cleanUrl = window.location.pathname;
         window.history.replaceState({}, '', cleanUrl);
       }
     }
-  }, []);
+  }, [mounted]);
 
   // Logical handlers
   const updateQty = (id: string, delta: number) => {
+    const existing = scannedItems.find(si => si.item.id === id);
+    if (existing && delta > 0 && existing.quantity + delta > existing.item.stok_saat_ini) {
+      setErrorMsg(`Stok tidak mencukupi untuk "${existing.item.nama}". Batas maksimum: ${existing.item.stok_saat_ini} Pcs.`);
+      return;
+    }
     setScannedItems(prev =>
       prev
         .map(si => {
           if (si.item.id === id) {
-            const nextQty = si.quantity + delta;
-            if (nextQty > si.item.stok_saat_ini) {
-              setErrorMsg(`Stok tidak mencukupi untuk "${si.item.nama}". Batas maksimum: ${si.item.stok_saat_ini} Pcs.`);
-              return si;
-            }
-            return { ...si, quantity: nextQty };
+            return { ...si, quantity: si.quantity + delta };
           }
           return si;
         })
@@ -316,7 +332,7 @@ export default function CheckoutSubSection() {
     setScannedItems([]);
     setErrorMsg(null);
     setInfoMsg(null);
-    lastScannedSkuRef.current = null;
+    setLastScannedSku(null);
   };
 
   // Real-time calculations with useMemo
@@ -526,9 +542,9 @@ export default function CheckoutSubSection() {
 
             {/* List block */}
             <div className="space-y-3 max-h-[460px] overflow-y-auto pr-1">
-              {scannedItems.map(({ item, quantity }, idx) => {
+              {scannedItems.map(({ item, quantity }) => {
                 const subTotalItem = item.harga * quantity;
-                const isLatest = item.kode_produk === lastScannedSkuRef.current;
+                const isLatest = item.kode_produk === lastScannedSku;
                 
                 return (
                   <div

@@ -15,9 +15,7 @@ import {
   Printer,
   History,
   Info,
-  DollarSign,
-  ArrowRight,
-  Loader2
+  ArrowRight
 } from 'lucide-react';
 import { Produk, Penjualan, DetailPenjualan } from '@/types/database';
 
@@ -35,7 +33,18 @@ interface CartItem {
   jumlah: number;
   maxStok: number;
 }
-
+interface SuccessInvoice {
+  nomor_invoice: string;
+  items: {
+    id: string;
+    nama: string;
+    harga: number;
+    jumlah: number;
+  }[];
+  total_harga: number;
+  cash: number;
+  change: number;
+}
 export default function PenjualanClient({
   products: initialProducts,
   initialInvoices,
@@ -49,33 +58,28 @@ export default function PenjualanClient({
   const [activeTab, setActiveTab] = useState<'pos' | 'history'>('pos');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [search, setSearch] = useState('');
-  const [products, setProducts] = useState<Produk[]>(initialProducts);
+  const [searchResults, setSearchResults] = useState<Produk[] | null>(null);
   const [cashReceived, setCashReceived] = useState<string>('');
   const [invoices, setInvoices] = useState<Penjualan[]>(initialInvoices);
   const [isPending, startTransition] = useTransition();
 
-  // Sync state values on initial props change from server updates
-  useEffect(() => {
-    setProducts(initialProducts);
-  }, [initialProducts]);
-
-  useEffect(() => {
+  // Sync state values when props change directly in render (avoids cascading render effects)
+  const [prevInitialInvoices, setPrevInitialInvoices] = useState(initialInvoices);
+  if (initialInvoices !== prevInitialInvoices) {
+    setPrevInitialInvoices(initialInvoices);
     setInvoices(initialInvoices);
-  }, [initialInvoices]);
+  }
 
-  // Autocomplete search execution from API endpoint
+  // Autocomplete search execution from API endpoint (debounced)
   useEffect(() => {
-    if (!search.trim()) {
-      setProducts(initialProducts);
-      return;
-    }
+    if (!search.trim()) return;
 
     const delayDebounceFn = setTimeout(async () => {
       try {
         const res = await fetch(`/api/produk/search?q=${encodeURIComponent(search)}`);
         if (res.ok) {
           const data = await res.json();
-          setProducts(data);
+          setSearchResults(data);
         }
       } catch (err) {
         console.error('Error fetching search results:', err);
@@ -83,10 +87,10 @@ export default function PenjualanClient({
     }, 250);
 
     return () => clearTimeout(delayDebounceFn);
-  }, [search, initialProducts]);
+  }, [search]);
 
   // Modals state
-  const [successInvoice, setSuccessInvoice] = useState<any | null>(null);
+  const [successInvoice, setSuccessInvoice] = useState<SuccessInvoice | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<Penjualan | null>(null);
   const [invoiceDetails, setInvoiceDetails] = useState<DetailPenjualan[]>([]);
   const [loadingDetails, setLoadingDetails] = useState(false);
@@ -95,7 +99,7 @@ export default function PenjualanClient({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Search logic is handled dynamically via autocomplete fetch
-  const filteredProducts = products;
+  const filteredProducts = search.trim() ? (searchResults ?? initialProducts) : initialProducts;
 
   // Add to cart
   const addToCart = (product: Produk) => {
@@ -198,7 +202,7 @@ export default function PenjualanClient({
 
     setLoadingDetails(false);
     if (!error && data) {
-      setInvoiceDetails(data as any[]);
+      setInvoiceDetails(data as DetailPenjualan[]);
     } else {
       alert('Gagal mengambil rincian invoice.');
     }
@@ -250,7 +254,12 @@ export default function PenjualanClient({
                 type="text"
                 placeholder="Cari nama barang atau kode produk..."
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  if (!e.target.value.trim()) {
+                    setSearchResults(null);
+                  }
+                }}
                 className="w-full pl-10 pr-4 py-2.5 bg-slate-900/40 border border-slate-800 rounded-xl text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
               />
             </div>
@@ -533,7 +542,7 @@ export default function PenjualanClient({
 
             {/* Line items details */}
             <div className="border-t border-b border-dashed border-slate-300 py-3 space-y-2 text-xs">
-              {successInvoice.items.map((item: any) => (
+              {successInvoice.items.map((item) => (
                 <div key={item.id} className="flex justify-between font-mono">
                   <span className="truncate max-w-[200px]">{item.nama} x{item.jumlah}</span>
                   <span className="font-semibold">{formatIDR(item.harga * item.jumlah)}</span>

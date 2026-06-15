@@ -31,7 +31,7 @@ BEGIN
       out_of_stock_count = out_of_stock_count + (CASE WHEN NEW.stok_saat_ini = 0 THEN 1 ELSE 0 END),
       updated_at = now()
     WHERE id = 1;
-  ELIF (TG_OP = 'DELETE') THEN
+  ELSIF (TG_OP = 'DELETE') THEN
     UPDATE public.dashboard_stats_cache
     SET
       total_products = total_products - 1,
@@ -39,7 +39,7 @@ BEGIN
       out_of_stock_count = out_of_stock_count - (CASE WHEN OLD.stok_saat_ini = 0 THEN 1 ELSE 0 END),
       updated_at = now()
     WHERE id = 1;
-  ELIF (TG_OP = 'UPDATE') THEN
+  ELSIF (TG_OP = 'UPDATE') THEN
     UPDATE public.dashboard_stats_cache
     SET
       low_stock_count = low_stock_count 
@@ -72,14 +72,14 @@ BEGIN
       total_revenue = total_revenue + NEW.total_harga,
       updated_at = now()
     WHERE id = 1;
-  ELIF (TG_OP = 'DELETE') THEN
+  ELSIF (TG_OP = 'DELETE') THEN
     UPDATE public.dashboard_stats_cache
     SET
       total_sales_count = total_sales_count - 1,
       total_revenue = total_revenue - OLD.total_harga,
       updated_at = now()
     WHERE id = 1;
-  ELIF (TG_OP = 'UPDATE') THEN
+  ELSIF (TG_OP = 'UPDATE') THEN
     UPDATE public.dashboard_stats_cache
     SET
       total_revenue = total_revenue - OLD.total_harga + NEW.total_harga,
@@ -92,8 +92,6 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Bind trigger to penjualan
 DROP TRIGGER IF EXISTS trigger_sync_dashboard_sales_stats ON public.penjualan;
-CREATE TRIGGER trigger_sync_dashboard_sales_stats
-AFTER INSERT OR DELETE OR UPDATE OF total_harga ON public.penjualan;
 CREATE TRIGGER trigger_sync_dashboard_sales_stats
 AFTER INSERT OR DELETE OR UPDATE OF total_harga ON public.penjualan
 FOR EACH ROW EXECUTE FUNCTION public.sync_dashboard_sales_stats();

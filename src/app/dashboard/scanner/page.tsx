@@ -1,36 +1,43 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import { createClient } from '@/utils/supabase/client';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 import {
   Camera,
-  RefreshCw,
-  AlertTriangle,
   CheckCircle,
   Wifi,
   Tv,
   Zap,
-  Play,
   Pause,
   Loader2
 } from 'lucide-react';
 
+const emptySubscribe = () => () => {};
+const getClientSnapshot = () => true;
+const getServerSnapshot = () => false;
+
 export default function MobileScannerPage() {
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(
+    emptySubscribe,
+    getClientSnapshot,
+    getServerSnapshot
+  );
   const [scannedCode, setScannedCode] = useState<string | null>(null);
   const [scanStatus, setScanStatus] = useState<'ready' | 'paused' | 'error'>('ready');
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
 
   const scannerRef = useRef<Html5QrcodeScanner | null>(null);
-  const channelRef = useRef<any>(null);
+  const channelRef = useRef<RealtimeChannel | null>(null);
   const cooldownRef = useRef(false);
+  const cooldownTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Next.js client-side hydration check
+  const connectionStatusRef = useRef(connectionStatus);
   useEffect(() => {
-    setMounted(true);
-  }, []);
+    connectionStatusRef.current = connectionStatus;
+  }, [connectionStatus]);
+
 
   // Supabase Realtime WebSocket Connection
   useEffect(() => {
@@ -72,10 +79,9 @@ export default function MobileScannerPage() {
 
     setScannedCode(trimmedCode);
     setScanStatus('paused');
-    setErrorMsg(null);
 
     // 1. Broadcast the scanned SKU via Supabase Realtime channel
-    if (channelRef.current && connectionStatus === 'connected') {
+    if (channelRef.current && connectionStatusRef.current === 'connected') {
       channelRef.current.send({
         type: 'broadcast',
         event: 'barcode-scanned',
@@ -101,7 +107,7 @@ export default function MobileScannerPage() {
     }
 
     // 4. Set a 1000ms delay timeout to resume scanner
-    setTimeout(() => {
+    cooldownTimeoutRef.current = setTimeout(() => {
       if (scannerRef.current) {
         try {
           scannerRef.current.resume();
@@ -116,6 +122,11 @@ export default function MobileScannerPage() {
       }
     }, 1000);
   };
+
+  const handleScanSuccessRef = useRef(handleScanSuccess);
+  useEffect(() => {
+    handleScanSuccessRef.current = handleScanSuccess;
+  });
 
   // Initializing Camera Scanner Render
   useEffect(() => {
@@ -141,15 +152,21 @@ export default function MobileScannerPage() {
     // Render viewfinder on mount
     scanner.render(
       (decodedText) => {
-        handleScanSuccess(decodedText);
+        handleScanSuccessRef.current(decodedText);
       },
-      (error) => {
+      () => {
         // Avoid spamming error console logs on every scan attempt
       }
     );
 
     return () => {
-      // 4. Safe clear unmount release of camera streams
+      // Clear timeout and reset lock state
+      if (cooldownTimeoutRef.current) {
+        clearTimeout(cooldownTimeoutRef.current);
+      }
+      cooldownRef.current = false;
+
+      // Safe clear unmount release of camera streams
       if (scannerRef.current) {
         try {
           scannerRef.current.clear();
@@ -158,7 +175,7 @@ export default function MobileScannerPage() {
         }
       }
     };
-  }, [mounted, connectionStatus]);
+  }, [mounted]);
 
   if (!mounted) {
     return (

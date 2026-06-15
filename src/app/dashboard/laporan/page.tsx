@@ -24,7 +24,8 @@ export default async function LaporanPage({ searchParams }: PageProps) {
   const page = Number(params.page || '1');
   const ITEMS_PER_PAGE = 10;
   const from = (page - 1) * ITEMS_PER_PAGE;
-  const to = from + ITEMS_PER_PAGE; // Fetch 11 items to check for Next page
+  // Fetch 11 items (inclusive range) to detect if a next page exists with zero COUNT(*) overhead
+  const to = from + ITEMS_PER_PAGE;
 
   // 1. Compute date boundaries based on the active filter range
   const now = new Date();
@@ -50,26 +51,55 @@ export default async function LaporanPage({ searchParams }: PageProps) {
   }
   // 'all' → no date filters
 
-  // 2. Build summary query on the pre-cached materialized view daily_sales_summary_mv
-  const summaryQuery = supabase
-    .from('daily_sales_summary_mv')
-    .select('tanggal, produk_id, nama_produk, sku_produk, total_terjual, total_pendapatan, total_laba')
-    .order('tanggal', { ascending: false });
+  // 2. Build summary query on the appropriate view
+  let summaryQuery;
+  
+  if (range === 'all') {
+    // Query monthly sales aggregates from the monthly_sales_summary view for faster load
+    summaryQuery = supabase
+      .from('monthly_sales_summary')
+      .select('bulan, total_terjual, total_pendapatan, total_laba')
+      .order('bulan', { ascending: false });
+  } else {
+    // Query daily detailed sales from the pre-cached materialized view daily_sales_summary_mv
+    summaryQuery = supabase
+      .from('daily_sales_summary_mv')
+      .select('tanggal, produk_id, nama_produk, sku_produk, total_terjual, total_pendapatan, total_laba')
+      .order('tanggal', { ascending: false });
 
-  if (startDate) {
-    summaryQuery.gte('tanggal', startDate);
-  }
-  if (endDate) {
-    summaryQuery.lte('tanggal', endDate);
+    if (startDate) {
+      summaryQuery = summaryQuery.gte('tanggal', startDate);
+    }
+    if (endDate) {
+      summaryQuery = summaryQuery.lte('tanggal', endDate);
+    }
   }
 
-  // Apply pagination range (fetching 11 items)
-  summaryQuery.range(from, to);
+  // Apply pagination range (fetching 11 items to detect hasMore with zero COUNT(*) overhead)
+  summaryQuery = summaryQuery.range(from, to);
 
   // 3. Execute query — auth already resolved via cache, no parallel profile needed
-  const summaryResult = await summaryQuery;
+  const { data: rawSummaryData, error: summaryError } = await summaryQuery;
 
-  const rawSummary = (summaryResult.data as any[]) || [];
+  if (summaryError) {
+    console.error(`Failed to fetch sales summary from ${range === 'all' ? 'monthly_sales_summary' : 'daily_sales_summary_mv'}:`, summaryError.message);
+  }
+
+  let rawSummary = (rawSummaryData as any[]) || [];
+
+  // If range is 'all', map the monthly schema format to SummaryItem interface format
+  if (range === 'all') {
+    rawSummary = rawSummary.map((item) => ({
+      tanggal: item.bulan,
+      produk_id: 'monthly-aggregate',
+      nama_produk: '',
+      sku_produk: '',
+      total_terjual: item.total_terjual || 0,
+      total_pendapatan: item.total_pendapatan || 0,
+      total_laba: item.total_laba || 0,
+    }));
+  }
+
   const hasMore = rawSummary.length > ITEMS_PER_PAGE;
   const salesSummary = hasMore ? rawSummary.slice(0, ITEMS_PER_PAGE) : rawSummary;
 

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import {
   ShoppingCart,
@@ -34,13 +34,30 @@ const MOCK_PRODUCTS = [
   { id: 'mock-6', nama: 'Pringles Original 107g', harga: 24500, kode_produk: '8991002005006' }
 ];
 
+const emptySubscribe = () => () => {};
+const getClientSnapshot = () => true;
+const getServerSnapshot = () => false;
+
 export default function CheckoutPage() {
-  const [mounted, setMounted] = useState(false);
+  // Supabase client instance created once at the component level
+  const supabase = useMemo(() => createClient(), []);
+
+  const mounted = useSyncExternalStore(
+    emptySubscribe,
+    getClientSnapshot,
+    getServerSnapshot
+  );
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [socketStatus, setSocketStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+
+  // Track latest cartItems in a ref to avoid asynchronous race conditions in state check
+  const cartItemsRef = useRef<CartItem[]>([]);
+  useEffect(() => {
+    cartItemsRef.current = cartItems;
+  }, [cartItems]);
 
   // Client-Side Request Cache
   const productCacheRef = useRef<Record<string, { id: string; name: string; price: number; sku: string }>>({});
@@ -50,11 +67,6 @@ export default function CheckoutPage() {
 
   // Keyboard Buffer references for hardware scanner emulation
   const keyBufferRef = useRef<{ char: string; time: number }[]>([]);
-
-  // Client hydration check
-  useEffect(() => {
-    setMounted(true);
-  }, []);
 
   // Format currency into Rupiah (IDR)
   const formatIDR = (value: number) => {
@@ -82,21 +94,23 @@ export default function CheckoutPage() {
     setErrorMsg(null);
     setInfoMsg(null);
 
-    // 1. Check if item already exists in local cartItems state
-    let itemExists = false;
-    setCartItems((prevItems) => {
-      const idx = prevItems.findIndex((item) => item.sku.toLowerCase() === trimmedSku.toLowerCase());
-      if (idx > -1) {
-        itemExists = true;
+    // 1. Check if item already exists in local cartItems state (Bug 1 Fix using latest Ref check)
+    const existingIndex = cartItemsRef.current.findIndex(
+      (item) => item.sku.toLowerCase() === trimmedSku.toLowerCase()
+    );
+    if (existingIndex > -1) {
+      const existingItemName = cartItemsRef.current[existingIndex].name;
+      setCartItems((prevItems) => {
         const updated = [...prevItems];
-        updated[idx] = { ...updated[idx], quantity: updated[idx].quantity + 1 };
-        setInfoMsg(`Jumlah barang "${updated[idx].name}" ditambahkan.`);
+        const idx = updated.findIndex((item) => item.sku.toLowerCase() === trimmedSku.toLowerCase());
+        if (idx > -1) {
+          updated[idx] = { ...updated[idx], quantity: updated[idx].quantity + 1 };
+        }
         return updated;
-      }
-      return prevItems;
-    });
-
-    if (itemExists) return;
+      });
+      setInfoMsg(`Jumlah barang "${existingItemName}" ditambahkan.`);
+      return;
+    }
 
     // 2. Check local request cache first (instantly resolves at 0ms latency)
     const cachedItem = productCacheRef.current[trimmedSku.toLowerCase()];
@@ -137,19 +151,33 @@ export default function CheckoutPage() {
       return;
     }
 
-    // 4. Query remote database (produk & products fallback)
+    // 4. Query remote database (produk & products fallback) (Bug 2 Fix: Sequential fallback lookup)
     setIsSearching(true);
     try {
-      const supabase = createClient();
-      
-      // Target local schema 'produk' first
-      const { data: dbData, error: dbError } = await supabase
+      const { data: dbData, error: produkError } = await supabase
         .from('produk')
         .select('*')
         .eq('kode_produk', trimmedSku)
-        .single();
+        .maybeSingle();
 
-      if (!dbError && dbData) {
+      if (produkError) {
+        console.error('Error fetching from produk table:', produkError);
+      }
+
+      let altData = null;
+      if (!dbData) {
+        const { data: productsData, error: productsError } = await supabase
+          .from('products')
+          .select('*')
+          .eq('sku', trimmedSku)
+          .maybeSingle();
+        if (productsError) {
+          console.error('Error fetching from products table:', productsError);
+        }
+        altData = productsData;
+      }
+
+      if (dbData) {
         const itemInfo = {
           id: dbData.id,
           name: dbData.nama,
@@ -166,36 +194,27 @@ export default function CheckoutPage() {
           }
         ]);
         setInfoMsg(`Barang baru terbaca (Katalog): ${dbData.nama}`);
+      } else if (altData) {
+        const itemInfo = {
+          id: altData.id,
+          name: altData.name || altData.nama,
+          price: Number(altData.price || altData.harga),
+          sku: altData.sku
+        };
+        // Save to cache
+        productCacheRef.current[trimmedSku.toLowerCase()] = itemInfo;
+        setCartItems((prev) => [
+          ...prev,
+          {
+            ...itemInfo,
+            quantity: 1
+          }
+        ]);
+        setInfoMsg(`Barang baru terbaca (Products DB): ${altData.name}`);
       } else {
-        // Fallback: Query remote 'products' table using 'sku' column as specified in prompt
-        const { data: altData, error: altError } = await supabase
-          .from('products')
-          .select('*')
-          .eq('sku', trimmedSku)
-          .single();
-
-        if (!altError && altData) {
-          const itemInfo = {
-            id: altData.id,
-            name: altData.name || altData.nama,
-            price: Number(altData.price || altData.harga),
-            sku: altData.sku
-          };
-          // Save to cache
-          productCacheRef.current[trimmedSku.toLowerCase()] = itemInfo;
-          setCartItems((prev) => [
-            ...prev,
-            {
-              ...itemInfo,
-              quantity: 1
-            }
-          ]);
-          setInfoMsg(`Barang baru terbaca (Products DB): ${altData.name}`);
-        } else {
-          setErrorMsg(`SKU Barcode #${trimmedSku} tidak ditemukan di catalog produk.`);
-        }
+        setErrorMsg(`SKU Barcode #${trimmedSku} tidak ditemukan di catalog produk.`);
       }
-    } catch (err) {
+    } catch {
       setErrorMsg('Kesalahan jaringan saat melakukan lookup barcode di server database.');
     } finally {
       setIsSearching(false);
@@ -275,11 +294,10 @@ export default function CheckoutPage() {
     };
   }, [mounted]);
 
-  // Supabase Realtime Channel Subscription (Optimized with self: false parameter filtering)
+  // Supabase Realtime Channel Subscription (Optimized with self: false parameter filtering) (Bug 3 Fix: uses memoized client)
   useEffect(() => {
     if (!mounted) return;
 
-    const supabase = createClient();
     const channel = supabase.channel('inventory-checkout-room', {
       config: {
         broadcast: { self: false } // Avoid self-broadcast feedback loops
@@ -305,15 +323,15 @@ export default function CheckoutPage() {
     return () => {
       channel.unsubscribe();
     };
-  }, [mounted]);
+  }, [mounted, supabase]);
 
-  // Read URL query scan parameter on mount (redirect fallback support)
+  // Read URL query scan parameter on mount (redirect fallback support) (Bug 4 Fix)
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const scanSku = params.get('scan');
       if (scanSku) {
-        handleIncomingBarcode(scanSku);
+        handleIncomingBarcodeRef.current(scanSku);
         // Clear params to prevent scan replication on reload
         const cleanUrl = window.location.pathname;
         window.history.replaceState({}, '', cleanUrl);
@@ -436,7 +454,7 @@ export default function CheckoutPage() {
                 Waiting for a mobile barcode scan event...
               </p>
               <p className="text-[10px] text-slate-650 mt-1 max-w-xs leading-relaxed">
-                Tembak barcode produk menggunakan scanner laser USB atau buka menu "Pemindai Mobile" di HP Anda untuk mensinkronisasi item.
+                Tembak barcode produk menggunakan scanner laser USB atau buka menu &quot;Pemindai Mobile&quot; di HP Anda untuk mensinkronisasi item.
               </p>
             </div>
           ) : (

@@ -1,23 +1,11 @@
 'use server';
 
-import { createClient } from '@/utils/supabase/server';
 import { getAuthenticatedUser } from '@/utils/supabase/auth';
 import { revalidatePath } from 'next/cache';
-
-export async function getUserAuthDetails() {
-  const { profile } = await getAuthenticatedUser();
-  if (!profile) return null;
-  return { id: profile.id, role: profile.role };
-}
-
-async function verifyOwner() {
-  const profile = await getUserAuthDetails();
-  return { isOwner: profile?.role === 'owner', userId: profile?.id || null };
-}
+import { randomUUID } from 'crypto';
 
 export async function createProduk(formData: FormData) {
-  const supabase = await createClient();
-  const profile = await getUserAuthDetails();
+  const { profile, supabase } = await getAuthenticatedUser();
   if (!profile) return { error: 'Sesi kedaluwarsa. Silakan masuk kembali.' };
 
   if (profile.role !== 'owner') {
@@ -37,11 +25,12 @@ export async function createProduk(formData: FormData) {
 
   // Handle Image Upload
   let gambar_url: string | null = null;
+  let uploadedFilePath: string | null = null;
   const imageFile = formData.get('gambar') as File | null;
   if (imageFile && imageFile.size > 0 && imageFile.name) {
     try {
       const fileExt = imageFile.name.split('.').pop();
-      const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
+      const fileName = `${randomUUID()}.${fileExt}`;
       const filePath = `${fileName}`;
 
       const { error: uploadError } = await supabase.storage
@@ -56,13 +45,15 @@ export async function createProduk(formData: FormData) {
         return { error: `Gagal mengunggah gambar: ${uploadError.message}` };
       }
 
+      uploadedFilePath = filePath;
       const { data: urlData } = supabase.storage
         .from('product-images')
         .getPublicUrl(filePath);
 
       gambar_url = urlData.publicUrl;
-    } catch (err: any) {
-      return { error: `Error upload gambar: ${err.message || err}` };
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      return { error: `Error upload gambar: ${errorMessage}` };
     }
   }
 
@@ -82,6 +73,10 @@ export async function createProduk(formData: FormData) {
     .single();
 
   if (error) {
+    // Cleanup orphaned image if database insert fails
+    if (uploadedFilePath) {
+      await supabase.storage.from('product-images').remove([uploadedFilePath]);
+    }
     if (error.message.includes('unique constraint')) {
       return { error: 'Kode produk sudah terdaftar.' };
     }
@@ -90,13 +85,23 @@ export async function createProduk(formData: FormData) {
 
   // If there's an initial stock, log it in stock logs!
   if (stok_awal > 0 && newProduct) {
-    await supabase.from('stok_log').insert({
+    const { error: logError } = await supabase.from('stok_log').insert({
       produk_id: newProduct.id,
       tipe: 'masuk',
       jumlah: stok_awal,
       keterangan: 'Stok awal produk baru',
       dibuat_oleh: profile.id
     });
+
+    if (logError) {
+      console.error('Gagal memasukkan stok_log awal:', logError.message);
+      // Rollback: Delete the product and cleanup the uploaded image
+      await supabase.from('produk').delete().eq('id', newProduct.id);
+      if (uploadedFilePath) {
+        await supabase.storage.from('product-images').remove([uploadedFilePath]);
+      }
+      return { error: `Gagal mencatat stok awal: ${logError.message}` };
+    }
   }
 
   revalidatePath('/dashboard/produk');
@@ -105,11 +110,9 @@ export async function createProduk(formData: FormData) {
 }
 
 export async function updateProduk(id: string, formData: FormData) {
-  // Use cached auth — eliminates getUser() + profile query waterfall
   const { profile, supabase } = await getAuthenticatedUser();
   if (!profile) return { error: 'Sesi kedaluwarsa.' };
 
-  // Only product query needed — profile already cached
   const { data: currentProduct, error: fetchError } = await supabase
     .from('produk')
     .select('harga, harga_modal, gambar_url')
@@ -129,12 +132,17 @@ export async function updateProduk(id: string, formData: FormData) {
     return { error: 'Nama produk wajib diisi.' };
   }
 
-  const updateData: any = {
+  const updateData: {
+    nama: string;
+    deskripsi: string | null;
+    harga?: number;
+    harga_modal?: number | null;
+    gambar_url?: string;
+  } = {
     nama,
     deskripsi: deskripsi || null
   };
 
-  // Enforce price change protection
   if (Number(currentProduct.harga) !== inputHarga) {
     if (profile.role !== 'owner') {
       return { error: 'Hanya Owner yang dapat mengubah harga produk.' };
@@ -142,7 +150,6 @@ export async function updateProduk(id: string, formData: FormData) {
     updateData.harga = inputHarga;
   }
 
-  // Enforce cost price change protection
   if (inputHargaModal !== null && Number(currentProduct.harga_modal || 0) !== inputHargaModal) {
     if (profile.role !== 'owner') {
       return { error: 'Hanya Owner yang dapat mengubah harga modal produk.' };
@@ -150,14 +157,14 @@ export async function updateProduk(id: string, formData: FormData) {
     updateData.harga_modal = inputHargaModal;
   }
 
-  // Handle Image Upload if a new file was provided, avoiding Buffer overhead by uploading the File object directly
   const imageFile = formData.get('gambar') as File | null;
   let oldImageToDelete: string | null = null;
+  let uploadedFilePath: string | null = null;
 
   if (imageFile && imageFile.size > 0 && imageFile.name) {
     try {
       const fileExt = imageFile.name.split('.').pop();
-      const fileName = `${Math.random().toString(36).substring(2, 15)}_${Date.now()}.${fileExt}`;
+      const fileName = `${randomUUID()}.${fileExt}`;
       const filePath = `${fileName}`;
 
       const { error: uploadError } = await supabase.storage
@@ -172,18 +179,19 @@ export async function updateProduk(id: string, formData: FormData) {
         return { error: `Gagal mengunggah gambar baru: ${uploadError.message}` };
       }
 
+      uploadedFilePath = filePath;
       const { data: urlData } = supabase.storage
         .from('product-images')
         .getPublicUrl(filePath);
 
       updateData.gambar_url = urlData.publicUrl;
 
-      // Mark the old image to delete on database update success
       if (currentProduct.gambar_url) {
         oldImageToDelete = currentProduct.gambar_url;
       }
-    } catch (err: any) {
-      return { error: `Error upload gambar baru: ${err.message || err}` };
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      return { error: `Error upload gambar baru: ${errorMessage}` };
     }
   }
 
@@ -193,12 +201,13 @@ export async function updateProduk(id: string, formData: FormData) {
     .eq('id', id);
 
   if (updateError) {
-    // If the database update fails, we do not delete the old image.
-    // The new uploaded image remains in storage and will be pruned by the cron sweep.
+    // Cleanup new uploaded image if database update fails
+    if (uploadedFilePath) {
+      await supabase.storage.from('product-images').remove([uploadedFilePath]);
+    }
     return { error: updateError.message };
   }
 
-  // Database update succeeded! Now safely clean up the old image from storage to save space
   if (oldImageToDelete) {
     try {
       const oldPath = oldImageToDelete.split('/').pop();
@@ -216,14 +225,11 @@ export async function updateProduk(id: string, formData: FormData) {
 }
 
 export async function deleteProduk(id: string) {
-  const { isOwner } = await verifyOwner();
-  if (!isOwner) {
+  const { profile, supabase } = await getAuthenticatedUser();
+  if (!profile || profile.role !== 'owner') {
     return { error: 'Hanya Owner yang berhak menghapus produk.' };
   }
 
-  const supabase = await createClient();
-
-  // Fetch the product details first to get the gambar_url
   const { data: product, error: fetchError } = await supabase
     .from('produk')
     .select('gambar_url')
@@ -234,7 +240,6 @@ export async function deleteProduk(id: string) {
     return { error: 'Produk tidak ditemukan.' };
   }
 
-  // Delete product row from the database
   const { error: deleteError } = await supabase
     .from('produk')
     .delete()
@@ -244,7 +249,6 @@ export async function deleteProduk(id: string) {
     return { error: deleteError.message };
   }
 
-  // Database delete succeeded! Now safely clean up the product image from storage
   if (product.gambar_url) {
     try {
       const fileName = product.gambar_url.split('/').pop();
@@ -260,4 +264,3 @@ export async function deleteProduk(id: string) {
   revalidatePath('/dashboard');
   return { success: true };
 }
-
