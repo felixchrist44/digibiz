@@ -36,6 +36,7 @@ export async function signup(prevState: any, formData: FormData) {
   const email = formData.get('email') as string;
   const password = formData.get('password') as string;
   const fullName = formData.get('fullName') as string;
+  const inviteToken = formData.get('inviteToken') as string;
 
   if (!email || !password || !fullName) {
     return { error: 'Semua kolom wajib diisi.' };
@@ -53,7 +54,8 @@ export async function signup(prevState: any, formData: FormData) {
     options: {
       data: {
         full_name: fullName,
-        role: 'staff',
+        role: inviteToken ? 'staff' : 'owner',
+        invite_token: inviteToken || undefined,
       },
     },
   });
@@ -62,7 +64,7 @@ export async function signup(prevState: any, formData: FormData) {
     return { error: error.message };
   }
 
-  return { success: 'Pendaftaran berhasil! Silakan masuk dengan akun baru Anda.' };
+  return { success: inviteToken ? 'Pendaftaran berhasil! Silakan masuk untuk bergabung.' : 'Pendaftaran berhasil! Silakan masuk dengan akun baru Anda.' };
 }
 
 export async function authenticate(prevState: any, formData: FormData) {

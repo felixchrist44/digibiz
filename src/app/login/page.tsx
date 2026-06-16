@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useActionState, useEffect } from 'react';
+import React, { useState, useActionState, useEffect, use } from 'react';
 import { useFormStatus } from 'react-dom';
 import { authenticate } from '@/app/auth/actions';
 import { Lock, Mail, Loader2, BarChart2, User } from 'lucide-react';
@@ -30,11 +30,17 @@ function SubmitButton({ isSignUp }: SubmitButtonProps) {
   );
 }
 
-export default function LoginPage() {
+interface LoginPageProps {
+  searchParams: Promise<{ invite?: string }>;
+}
+
+export default function LoginPage({ searchParams }: LoginPageProps) {
+  const resolvedParams = use(searchParams);
+  const inviteToken = resolvedParams?.invite || '';
   const [isSignUp, setIsSignUp] = useState(false);
   const [state, formAction] = useActionState(authenticate, null) as any;
 
-  // If registration is successful, automatically redirect/flip form to login mode
+  // If registration is successful, automatically flip form to login mode
   useEffect(() => {
     if (state?.success) {
       const timer = setTimeout(() => {
@@ -43,6 +49,13 @@ export default function LoginPage() {
       return () => clearTimeout(timer);
     }
   }, [state]);
+
+  // Automatically switch to SignUp mode if invite token is present
+  useEffect(() => {
+    if (inviteToken) {
+      setIsSignUp(true);
+    }
+  }, [inviteToken]);
 
   return (
     <div className="min-h-screen flex flex-col justify-center items-center bg-radial from-slate-900 via-indigo-950 to-slate-950 p-4 font-sans select-none">
@@ -67,12 +80,15 @@ export default function LoginPage() {
         {/* Login/Signup Form Container */}
         <div className="bg-slate-900/60 backdrop-blur-xl border border-slate-800/80 rounded-3xl p-8 shadow-2xl">
           <h2 className="text-xl font-bold text-white mb-6">
-            {isSignUp ? 'Daftar Akun Staff Baru' : 'Selamat Datang Kembali'}
+            {isSignUp ? (inviteToken ? 'Bergabung ke Toko (Undangan)' : 'Daftar Akun Staff Baru') : 'Selamat Datang Kembali'}
           </h2>
 
           <form action={formAction} className="space-y-6">
             {/* Hidden Input for Form Mode Router */}
             <input type="hidden" name="actionType" value={isSignUp ? 'signup' : 'login'} />
+            {isSignUp && inviteToken && (
+              <input type="hidden" name="inviteToken" value={inviteToken} />
+            )}
 
             {/* Full Name Input (Only on Sign Up Mode) */}
             {isSignUp && (

@@ -10,8 +10,9 @@ import {
   Plus,
   ShoppingCart
 } from 'lucide-react';
-import { Produk, Penjualan } from '@/types/database';
+import { Produk } from '@/types/database';
 import { getRecentSales } from '@/lib/queries';
+import DashboardInvoiceModal from '@/components/DashboardInvoiceModal';
 
 // ─── Currency formatter (shared) ─────────────────────────────────
 const formatIDR = (value: number) =>
@@ -22,10 +23,10 @@ const formatIDR = (value: number) =>
   }).format(value);
 
 // ─── Skeleton Fallbacks ──────────────────────────────────────────
-function StatsGridSkeleton() {
+function StatsGridSkeleton({ isOwner = true }: { isOwner?: boolean }) {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-      {[...Array(4)].map((_, i) => (
+    <div className={`grid grid-cols-1 sm:grid-cols-2 ${isOwner ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} gap-6`}>
+      {[...Array(isOwner ? 4 : 3)].map((_, i) => (
         <div
           key={i}
           className="bg-slate-900/40 backdrop-blur border border-slate-800/80 rounded-2xl p-6 shadow-xl flex items-center justify-between animate-pulse"
@@ -56,7 +57,7 @@ function ChartSkeleton() {
           <div
             key={i}
             className="flex-1 bg-slate-800/40 rounded-lg"
-            style={{ height: `${30 + Math.random() * 70}%` }}
+            style={{ height: `${30 + ((i * 17) % 70)}%` }}
           />
         ))}
       </div>
@@ -107,7 +108,7 @@ function RecentSalesSkeleton() {
 // ─── Async Data Components ───────────────────────────────────────
 
 /** Fetches stats from dashboard_stats_cache (or computes fallback) and renders stat cards */
-async function StatsGrid() {
+async function StatsGrid({ isOwner = true }: { isOwner?: boolean }) {
   const { supabase } = await getAuthenticatedUser();
 
   // Try the cache table first, fall back to direct counts
@@ -125,7 +126,7 @@ async function StatsGrid() {
         supabase.from('produk').select('id', { count: 'exact', head: true }).lte('stok_saat_ini', 5),
         supabase.from('produk').select('id', { count: 'exact', head: true }).eq('stok_saat_ini', 0),
         supabase.from('penjualan').select('id', { count: 'exact', head: true }),
-        supabase.rpc('get_total_revenue'),
+        isOwner ? supabase.rpc('get_total_revenue') : Promise.resolve({ data: 0 }),
       ]);
     stats = {
       totalProducts: productsRes.count ?? 0,
@@ -145,17 +146,19 @@ async function StatsGrid() {
   }
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+    <div className={`grid grid-cols-1 sm:grid-cols-2 ${isOwner ? 'lg:grid-cols-4' : 'lg:grid-cols-3'} gap-6`}>
       {/* Total Revenue */}
-      <div className="bg-slate-900/40 backdrop-blur border border-slate-800/80 rounded-2xl p-6 hover:border-slate-700/60 transition-all duration-200 shadow-xl flex items-center justify-between">
-        <div className="space-y-2">
-          <span className="text-xs font-semibold text-slate-455 uppercase tracking-wider">Total Pendapatan</span>
-          <p className="text-2xl font-bold text-white tracking-tight">{formatIDR(stats.totalRevenue)}</p>
+      {isOwner && (
+        <div className="bg-slate-900/40 backdrop-blur border border-slate-800/80 rounded-2xl p-6 hover:border-slate-700/60 transition-all duration-200 shadow-xl flex items-center justify-between">
+          <div className="space-y-2">
+            <span className="text-xs font-semibold text-slate-455 uppercase tracking-wider">Total Pendapatan</span>
+            <p className="text-2xl font-bold text-white tracking-tight">{formatIDR(stats.totalRevenue)}</p>
+          </div>
+          <div className="h-12 w-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+            <CircleDollarSign className="h-6 w-6" />
+          </div>
         </div>
-        <div className="h-12 w-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-          <CircleDollarSign className="h-6 w-6" />
-        </div>
-      </div>
+      )}
 
       {/* Total Sales Invoices */}
       <div className="bg-slate-900/40 backdrop-blur border border-slate-800/80 rounded-2xl p-6 hover:border-slate-700/60 transition-all duration-200 shadow-xl flex items-center justify-between">
@@ -364,7 +367,7 @@ async function RecentSalesTable() {
                   <td className="py-4 font-bold text-white">{formatIDR(Number(sale.total_harga))}</td>
                   <td className="py-4 text-right">
                     <Link
-                      href="/dashboard/penjualan"
+                      href={`/dashboard?invoice=${sale.nomor_invoice}`}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 rounded-lg text-xs font-semibold text-indigo-400 hover:text-indigo-350 transition-colors"
                     >
                       Detail
@@ -415,15 +418,17 @@ export default async function DashboardPage() {
       </div>
 
       {/* Stats Grid — streams in independently */}
-      <Suspense fallback={<StatsGridSkeleton />}>
-        <StatsGrid />
+      <Suspense fallback={<StatsGridSkeleton isOwner={isOwner} />}>
+        <StatsGrid isOwner={isOwner} />
       </Suspense>
 
       {/* Main dashboard content sections — each streams independently */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <Suspense fallback={<ChartSkeleton />}>
-          <SalesChart />
-        </Suspense>
+      <div className={isOwner ? "grid grid-cols-1 lg:grid-cols-3 gap-8" : "w-full"}>
+        {isOwner && (
+          <Suspense fallback={<ChartSkeleton />}>
+            <SalesChart />
+          </Suspense>
+        )}
 
         <Suspense fallback={<LowStockSkeleton />}>
           <LowStockAlerts />
@@ -434,6 +439,8 @@ export default async function DashboardPage() {
       <Suspense fallback={<RecentSalesSkeleton />}>
         <RecentSalesTable />
       </Suspense>
+
+      <DashboardInvoiceModal />
     </div>
   );
 }
