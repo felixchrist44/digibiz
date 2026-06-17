@@ -21,10 +21,12 @@ export default function MobileScanPage() {
   const [scanStatus, setScanStatus] = useState<'ready' | 'paused' | 'error'>('ready');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const [broadcastSuccess, setBroadcastSuccess] = useState(false);
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const channelRef = useRef<any>(null);
   const cooldownRef = useRef(false);
+  const cooldownTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Client hydration check
   useEffect(() => {
@@ -81,8 +83,10 @@ export default function MobileScanPage() {
         payload: { sku: trimmedCode }
       });
       console.log('Successfully broadcasted SKU:', trimmedCode);
+      setBroadcastSuccess(true);
     } else {
       console.warn('Realtime broadcast skipped: Not connected to socket.');
+      setBroadcastSuccess(false);
     }
 
     // 2. Browser vibration feedback (80ms pulse)
@@ -90,8 +94,13 @@ export default function MobileScanPage() {
       navigator.vibrate(80);
     }
 
+    // Clear previous timeout if any
+    if (cooldownTimeoutRef.current) {
+      clearTimeout(cooldownTimeoutRef.current);
+    }
+
     // 3. 1.5-second cooldown delay before resetting
-    setTimeout(() => {
+    cooldownTimeoutRef.current = setTimeout(() => {
       setScanStatus('ready');
       cooldownRef.current = false;
     }, 1500);
@@ -146,6 +155,9 @@ export default function MobileScanPage() {
     });
 
     return () => {
+      if (cooldownTimeoutRef.current) {
+        clearTimeout(cooldownTimeoutRef.current);
+      }
       if (scannerRef.current) {
         if (isScanningActive || scannerRef.current.isScanning) {
           scannerRef.current.stop()
@@ -274,10 +286,17 @@ export default function MobileScanPage() {
               <span className="text-xs font-mono font-extrabold text-white truncate max-w-[200px]">
                 {scannedCode}
               </span>
-              <span className="px-2 py-0.5 bg-emerald-950/40 border border-emerald-900/40 text-emerald-400 rounded text-[9px] font-bold flex items-center gap-1">
-                <CheckCircle className="h-3 w-3" />
-                Terkirim
-              </span>
+              {broadcastSuccess ? (
+                <span className="px-2 py-0.5 bg-emerald-950/40 border border-emerald-900/40 text-emerald-400 rounded text-[9px] font-bold flex items-center gap-1">
+                  <CheckCircle className="h-3 w-3" />
+                  Terkirim
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 bg-red-950/40 border border-red-900/40 text-red-400 rounded text-[9px] font-bold flex items-center gap-1">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  Gagal Kirim (Offline)
+                </span>
+              )}
             </div>
           ) : (
             <div className="text-[10px] text-slate-500 italic py-2.5 text-center border border-dashed border-slate-850 rounded-xl">
