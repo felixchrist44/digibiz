@@ -27,6 +27,12 @@ export default function MobileScanPage() {
   const channelRef = useRef<any>(null);
   const cooldownRef = useRef(false);
   const cooldownTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectionStatusRef = useRef(connectionStatus);
+
+  // Sync connectionStatusRef with connectionStatus state
+  useEffect(() => {
+    connectionStatusRef.current = connectionStatus;
+  }, [connectionStatus]);
 
   // Client hydration check
   useEffect(() => {
@@ -76,7 +82,7 @@ export default function MobileScanPage() {
     setErrorMsg(null);
 
     // 1. Broadcast the barcode data via Supabase Realtime Broadcast
-    if (channelRef.current && connectionStatus === 'connected') {
+    if (channelRef.current && connectionStatusRef.current === 'connected') {
       channelRef.current.send({
         type: 'broadcast',
         event: 'barcode-scanned',
