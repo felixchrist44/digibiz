@@ -242,6 +242,11 @@ BEGIN
     RAISE EXCEPTION 'Tenant ID tidak ditemukan di session JWT. Silakan login kembali.';
   END IF;
 
+  -- Prevent identity spoofing: Verify the operator matches the active session user
+  IF p_dibuat_oleh != auth.uid() THEN
+    RAISE EXCEPTION 'Akses ditolak: User ID operator tidak cocok dengan session aktif.';
+  END IF;
+
   v_penjualan_id := gen_random_uuid();
 
   -- Insert Invoice record
@@ -274,12 +279,22 @@ CREATE OR REPLACE FUNCTION public.adjust_stock_manual(
 DECLARE
   v_tenant_id UUID;
   v_stok_saat_ini INTEGER;
+  v_role VARCHAR;
 BEGIN
   -- Derive tenant identity securely from JWT metadata
   v_tenant_id := (auth.jwt() -> 'app_metadata' ->> 'tenant_id')::uuid;
 
   IF v_tenant_id IS NULL THEN
     RAISE EXCEPTION 'Tenant ID tidak ditemukan di session JWT. Silakan login kembali.';
+  END IF;
+
+  -- Enforce Role-Based Access Control: Only 'owner' is permitted to manually adjust stock
+  SELECT role INTO v_role 
+  FROM public.profiles 
+  WHERE id = auth.uid() AND tenant_id = v_tenant_id;
+
+  IF v_role IS NULL OR v_role != 'owner' THEN
+    RAISE EXCEPTION 'Akses ditolak: Hanya Owner yang dapat melakukan penyesuaian stok manual.';
   END IF;
 
   -- Lock row for concurrency check and validate ownership
