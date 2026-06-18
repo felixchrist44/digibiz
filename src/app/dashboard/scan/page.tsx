@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { Html5Qrcode } from 'html5-qrcode';
 import {
@@ -21,12 +21,14 @@ export default function MobileScanPage() {
   const [scanStatus, setScanStatus] = useState<'ready' | 'paused' | 'error'>('ready');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const [tenantId, setTenantId] = useState<string | null>(null);
   const [broadcastSuccess, setBroadcastSuccess] = useState(false);
+
+  const supabase = useMemo(() => createClient(), []);
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const channelRef = useRef<any>(null);
   const cooldownRef = useRef(false);
-  const cooldownTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectionStatusRef = useRef(connectionStatus);
 
   // Sync connectionStatusRef with connectionStatus state
@@ -39,12 +41,35 @@ export default function MobileScanPage() {
     setMounted(true);
   }, []);
 
-  // Initialize Supabase Realtime Broadcast Connection
+  // Fetch tenantId on mount (reads JWT session first, fallback to profiles)
   useEffect(() => {
     if (!mounted) return;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const jwtTenantId = session?.user?.app_metadata?.tenant_id;
+      if (jwtTenantId) {
+        setTenantId(jwtTenantId);
+      } else {
+        supabase.auth.getUser().then(({ data: { user } }) => {
+          if (user) {
+            supabase
+              .from('profiles')
+              .select('tenant_id')
+              .eq('id', user.id)
+              .single()
+              .then(({ data }) => {
+                if (data?.tenant_id) setTenantId(data.tenant_id);
+              });
+          }
+        });
+      }
+    });
+  }, [mounted, supabase]);
 
-    const supabase = createClient();
-    const channel = supabase.channel('inventory-checkout-room', {
+  // Initialize Supabase Realtime Broadcast Connection
+  useEffect(() => {
+    if (!mounted || !tenantId) return;
+
+    const channel = supabase.channel(`inventory-checkout-${tenantId}`, {
       config: {
         broadcast: { self: false } // Do not echo broadcast to ourselves
       }
@@ -53,7 +78,6 @@ export default function MobileScanPage() {
     channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         setConnectionStatus('connected');
-        console.log('POS Scanner: Realtime WebSocket Subscribed to inventory-checkout-room');
       } else if (status === 'TIMED_OUT' || status === 'CLOSED') {
         setConnectionStatus('disconnected');
       }
@@ -66,7 +90,7 @@ export default function MobileScanPage() {
         channelRef.current.unsubscribe();
       }
     };
-  }, [mounted]);
+  }, [mounted, tenantId, supabase]);
 
   // Success Scan Handler
   const handleScanSuccess = (decodedText: string) => {
@@ -88,10 +112,8 @@ export default function MobileScanPage() {
         event: 'barcode-scanned',
         payload: { sku: trimmedCode }
       });
-      console.log('Successfully broadcasted SKU:', trimmedCode);
       setBroadcastSuccess(true);
     } else {
-      console.warn('Realtime broadcast skipped: Not connected to socket.');
       setBroadcastSuccess(false);
     }
 
@@ -100,26 +122,16 @@ export default function MobileScanPage() {
       navigator.vibrate(80);
     }
 
-    // Clear previous timeout if any
-    if (cooldownTimeoutRef.current) {
-      clearTimeout(cooldownTimeoutRef.current);
-    }
-
     // 3. 1.5-second cooldown delay before resetting
-    cooldownTimeoutRef.current = setTimeout(() => {
+    setTimeout(() => {
       setScanStatus('ready');
       cooldownRef.current = false;
     }, 1500);
   };
 
-  const handleScanSuccessRef = useRef(handleScanSuccess);
-  useEffect(() => {
-    handleScanSuccessRef.current = handleScanSuccess;
-  });
-
   // Initialize Camera Stream Automatically on mount
   useEffect(() => {
-    if (!mounted) return;
+    if (!mounted || !tenantId) return;
 
     const scannerId = 'phone-camera-box-custom';
     const scanner = new Html5Qrcode(scannerId);
@@ -144,26 +156,23 @@ export default function MobileScanPage() {
         aspectRatio: 1.0 // Ideal square grid positioning on mobile screens
       },
       (decodedText) => {
-        handleScanSuccessRef.current(decodedText);
+        handleScanSuccess(decodedText);
       },
       (errorMessage) => {
         // Silent callback to avoid browser console spamming
       }
     )
-    .then(() => {
-      isScanningActive = true;
-      setScanStatus('ready');
-    })
-    .catch((err) => {
-      console.error('Autostart scanner failed:', err);
-      setErrorMsg('Gagal menyalakan kamera belakang secara otomatis. Pastikan izin kamera diberikan.');
-      setScanStatus('error');
-    });
+      .then(() => {
+        isScanningActive = true;
+        setScanStatus('ready');
+      })
+      .catch((err) => {
+        console.error('Autostart scanner failed:', err);
+        setErrorMsg('Gagal menyalakan kamera belakang secara otomatis. Pastikan izin kamera diberikan.');
+        setScanStatus('error');
+      });
 
     return () => {
-      if (cooldownTimeoutRef.current) {
-        clearTimeout(cooldownTimeoutRef.current);
-      }
       if (scannerRef.current) {
         if (isScanningActive || scannerRef.current.isScanning) {
           scannerRef.current.stop()
@@ -176,20 +185,20 @@ export default function MobileScanPage() {
         }
       }
     };
-  }, [mounted]);
+  }, [mounted, tenantId]);
 
-  if (!mounted) {
+  if (!mounted || !tenantId) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400">
         <Loader2 className="h-8 w-8 animate-spin text-indigo-400 mb-2" />
-        <p className="text-xs">Memuat modul pemindai...</p>
+        <p className="text-xs">{!mounted ? 'Memuat modul pemindai...' : 'Memuat sesi...'}</p>
       </div>
     );
   }
 
   return (
     <div className="min-h-[85vh] bg-slate-950 text-slate-100 flex flex-col items-center justify-between p-4 max-w-md mx-auto rounded-3xl border border-slate-900 shadow-2xl relative overflow-hidden">
-      
+
       {/* Header Info Panel */}
       <div className="w-full text-center space-y-2 mt-2">
         <div className="flex items-center justify-between px-2">
@@ -199,13 +208,12 @@ export default function MobileScanPage() {
           </span>
 
           {/* Connection Status Indicator */}
-          <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider border flex items-center gap-1.5 transition-all ${
-            connectionStatus === 'connected'
-              ? 'bg-emerald-950/40 border-emerald-900/50 text-emerald-400'
-              : connectionStatus === 'connecting'
+          <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider border flex items-center gap-1.5 transition-all ${connectionStatus === 'connected'
+            ? 'bg-emerald-950/40 border-emerald-900/50 text-emerald-400'
+            : connectionStatus === 'connecting'
               ? 'bg-amber-950/40 border-amber-900/50 text-amber-400 animate-pulse'
               : 'bg-red-950/40 border-red-900/50 text-red-400'
-          }`}>
+            }`}>
             <Wifi className="h-3 w-3" />
             {connectionStatus === 'connected' ? 'Soket Online' : connectionStatus === 'connecting' ? 'Menghubungkan' : 'Soket Offline'}
           </span>
@@ -236,7 +244,7 @@ export default function MobileScanPage() {
               <div className="absolute top-2 right-2 w-4 h-4 border-t-2 border-r-2 border-indigo-400 rounded-tr" />
               <div className="absolute bottom-2 left-2 w-4 h-4 border-b-2 border-l-2 border-indigo-400 rounded-bl" />
               <div className="absolute bottom-2 right-2 w-4 h-4 border-b-2 border-r-2 border-indigo-400 rounded-br" />
-              
+
               {/* Scanline Animation */}
               <div className="w-full h-[1px] bg-indigo-400/80 animate-[bounce_2s_infinite] shadow-lg shadow-indigo-500" />
             </div>
@@ -317,7 +325,7 @@ export default function MobileScanPage() {
         <span>Html5Qrcode Engine (Direct Stream)</span>
         <span>Haptic Vibe: {typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function' ? 'Supported' : 'Unsupported'}</span>
       </div>
-      
+
     </div>
   );
 }

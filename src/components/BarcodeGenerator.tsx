@@ -27,9 +27,10 @@ export default function BarcodeGenerator({ value, name, price }: BarcodeGenerato
   };
 
   return (
-    <div className="flex flex-col items-center justify-center p-6 bg-slate-900/80 border border-slate-800 rounded-2xl max-w-md mx-auto space-y-6 print-hide shadow-xl">
+    <div className="flex flex-col items-center justify-center p-6 bg-slate-900/80 border border-slate-800 rounded-2xl max-w-sm mx-auto space-y-6 print-hide shadow-xl">
       {/* Dynamic style block to isolate printing of ONLY the barcode card */}
-      <style dangerouslySetInnerHTML={{ __html: `
+      <style dangerouslySetInnerHTML={{
+        __html: `
         @media print {
           /* Hide all page content */
           body * {
@@ -44,7 +45,7 @@ export default function BarcodeGenerator({ value, name, price }: BarcodeGenerato
             left: 50% !important;
             top: 50% !important;
             transform: translate(-50%, -50%) !important;
-            width: 380px !important;
+            width: 300px !important;
             background: white !important;
             color: black !important;
             display: flex !important;
@@ -63,7 +64,7 @@ export default function BarcodeGenerator({ value, name, price }: BarcodeGenerato
       ` }} />
 
       <div className="text-center">
-        <h4 className="text-sm font-semibold text-slate-455 uppercase tracking-wider flex items-center justify-center gap-1.5">
+        <h4 className="text-sm font-semibold text-slate-450 uppercase tracking-wider flex items-center justify-center gap-1.5">
           <BarcodeIcon className="h-4 w-4 text-indigo-400" />
           Label Barcode Produk
         </h4>
@@ -72,7 +73,7 @@ export default function BarcodeGenerator({ value, name, price }: BarcodeGenerato
       {/* Printable Barcode Card Area */}
       <div
         id="printable-barcode-content"
-        className="bg-white border border-slate-200 rounded-xl px-4 py-6 flex flex-col items-center justify-center text-black w-full"
+        className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col items-center justify-center text-black w-full"
       >
         {/* Product Meta on Label */}
         <div className="text-center mb-2 font-sans w-full">

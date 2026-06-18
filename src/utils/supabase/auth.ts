@@ -24,6 +24,7 @@ export const getAuthenticatedUser = cache(async () => {
       const fullName = headersList.get('x-user-full-name') || '';
       const role = headersList.get('x-user-role') || 'staff';
       const createdAt = headersList.get('x-user-created-at') || '';
+      const tenantId = headersList.get('x-user-tenant-id') || '';
 
       const user = {
         id: userId,
@@ -32,6 +33,7 @@ export const getAuthenticatedUser = cache(async () => {
 
       const profile: Profile = {
         id: userId,
+        tenant_id: tenantId,
         full_name: fullName,
         role: role as 'owner' | 'staff',
         created_at: createdAt,
@@ -57,7 +59,7 @@ export const getAuthenticatedUser = cache(async () => {
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('id, full_name, role, created_at')
+    .select('id, tenant_id, full_name, role, created_at')
     .eq('id', user.id)
     .single();
 

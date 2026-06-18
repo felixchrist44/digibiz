@@ -1,12 +1,13 @@
 'use client';
 
-import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
+import React, { useState, useEffect, useRef, useSyncExternalStore, useMemo } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 import {
   Camera,
   CheckCircle,
+  AlertCircle,
   Wifi,
   Tv,
   Zap,
@@ -14,7 +15,7 @@ import {
   Loader2
 } from 'lucide-react';
 
-const emptySubscribe = () => () => {};
+const emptySubscribe = () => () => { };
 const getClientSnapshot = () => true;
 const getServerSnapshot = () => false;
 
@@ -27,6 +28,10 @@ export default function MobileScannerPage() {
   const [scannedCode, setScannedCode] = useState<string | null>(null);
   const [scanStatus, setScanStatus] = useState<'ready' | 'paused' | 'error'>('ready');
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const [tenantId, setTenantId] = useState<string | null>(null);
+  const [broadcastSuccess, setBroadcastSuccess] = useState(false);
+
+  const supabase = useMemo(() => createClient(), []);
 
   const scannerRef = useRef<Html5QrcodeScanner | null>(null);
   const channelRef = useRef<RealtimeChannel | null>(null);
@@ -39,12 +44,35 @@ export default function MobileScannerPage() {
   }, [connectionStatus]);
 
 
-  // Supabase Realtime WebSocket Connection
+  // Fetch tenantId on mount (reads JWT session first, fallback to profiles)
   useEffect(() => {
     if (!mounted) return;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const jwtTenantId = session?.user?.app_metadata?.tenant_id;
+      if (jwtTenantId) {
+        setTenantId(jwtTenantId);
+      } else {
+        supabase.auth.getUser().then(({ data: { user } }) => {
+          if (user) {
+            supabase
+              .from('profiles')
+              .select('tenant_id')
+              .eq('id', user.id)
+              .single()
+              .then(({ data }) => {
+                if (data?.tenant_id) setTenantId(data.tenant_id);
+              });
+          }
+        });
+      }
+    });
+  }, [mounted, supabase]);
 
-    const supabase = createClient();
-    const channel = supabase.channel('inventory-checkout-room', {
+  // Supabase Realtime WebSocket Connection
+  useEffect(() => {
+    if (!mounted || !tenantId) return;
+
+    const channel = supabase.channel(`inventory-checkout-${tenantId}`, {
       config: {
         broadcast: { self: false } // Avoid self-broadcast feedback loops
       }
@@ -53,7 +81,6 @@ export default function MobileScannerPage() {
     channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
         setConnectionStatus('connected');
-        console.log('Realtime WebSocket Subscribed to inventory-checkout-room');
       } else if (status === 'TIMED_OUT' || status === 'CLOSED') {
         setConnectionStatus('disconnected');
       }
@@ -66,7 +93,7 @@ export default function MobileScannerPage() {
         channelRef.current.unsubscribe();
       }
     };
-  }, [mounted]);
+  }, [mounted, tenantId, supabase]);
 
   // Main callback for successful barcode scans
   const handleScanSuccess = (decodedText: string) => {
@@ -87,8 +114,9 @@ export default function MobileScannerPage() {
         event: 'barcode-scanned',
         payload: { sku: trimmedCode }
       });
+      setBroadcastSuccess(true);
     } else {
-      console.warn('Realtime broadcast skipped: channel not connected.');
+      setBroadcastSuccess(false);
     }
 
     // 2. Mobile Haptic Vibration feedback (80ms pulse)
@@ -130,7 +158,7 @@ export default function MobileScannerPage() {
 
   // Initializing Camera Scanner Render
   useEffect(() => {
-    if (!mounted) return;
+    if (!mounted || !tenantId) return;
 
     const scannerId = 'phone-camera-box';
 
@@ -175,20 +203,20 @@ export default function MobileScannerPage() {
         }
       }
     };
-  }, [mounted]);
+  }, [mounted, tenantId]);
 
-  if (!mounted) {
+  if (!mounted || !tenantId) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400">
         <Loader2 className="h-8 w-8 animate-spin text-indigo-400 mb-2" />
-        <p className="text-xs">Memuat modul pemindai kamera...</p>
+        <p className="text-xs">{!mounted ? 'Memuat modul pemindai kamera...' : 'Memuat sesi...'}</p>
       </div>
     );
   }
 
   return (
     <div className="min-h-[80vh] bg-slate-950 text-slate-100 flex flex-col items-center justify-between p-4 max-w-md mx-auto rounded-3xl border border-slate-900 shadow-2xl relative overflow-hidden">
-      
+
       {/* Top Header Panel */}
       <div className="w-full text-center space-y-2 mt-2">
         <div className="flex items-center justify-between px-2">
@@ -198,18 +226,17 @@ export default function MobileScannerPage() {
           </span>
 
           {/* WebSocket Connection Status Tag */}
-          <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider border flex items-center gap-1 ${
-            connectionStatus === 'connected'
-              ? 'bg-emerald-950/40 border-emerald-900/50 text-emerald-400'
-              : connectionStatus === 'connecting'
+          <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider border flex items-center gap-1 ${connectionStatus === 'connected'
+            ? 'bg-emerald-950/40 border-emerald-900/50 text-emerald-400'
+            : connectionStatus === 'connecting'
               ? 'bg-amber-950/40 border-amber-900/50 text-amber-400 animate-pulse'
               : 'bg-red-950/40 border-red-900/50 text-red-400'
-          }`}>
+            }`}>
             <Wifi className="h-3 w-3" />
             {connectionStatus === 'connected' ? 'Soket Online' : connectionStatus === 'connecting' ? 'Menghubungkan' : 'Soket Offline'}
           </span>
         </div>
-        
+
         <h2 className="text-lg font-black tracking-tight text-white mt-3 flex items-center justify-center gap-1.5">
           <Camera className="h-5 w-5 text-indigo-400 animate-pulse" />
           Pemindai Kamera Smartphone
@@ -256,10 +283,17 @@ export default function MobileScannerPage() {
               <span className="text-xs font-mono font-black text-white truncate max-w-[200px]">
                 {scannedCode}
               </span>
-              <span className="px-2 py-0.5 bg-emerald-950/50 border border-emerald-900/30 text-emerald-400 rounded text-[9px] font-bold flex items-center gap-1">
-                <CheckCircle className="h-3 w-3" />
-                Terkirim
-              </span>
+              {broadcastSuccess ? (
+                <span className="px-2 py-0.5 bg-emerald-950/50 border border-emerald-900/30 text-emerald-400 rounded text-[9px] font-bold flex items-center gap-1">
+                  <CheckCircle className="h-3 w-3" />
+                  Terkirim
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 bg-red-950/50 border border-red-900/30 text-red-400 rounded text-[9px] font-bold flex items-center gap-1">
+                  <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+                  Gagal Kirim (Offline)
+                </span>
+              )}
             </div>
           ) : (
             <div className="text-[10px] text-slate-500 italic py-2 text-center border border-dashed border-slate-850 rounded-xl">
@@ -274,7 +308,7 @@ export default function MobileScannerPage() {
         <span>html5-qrcode engine v2.3</span>
         <span>Haptic Vibe: {typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function' ? 'Supported' : 'Unsupported'}</span>
       </div>
-      
+
     </div>
   );
 }

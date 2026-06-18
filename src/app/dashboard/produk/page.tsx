@@ -54,6 +54,7 @@ export default async function ProdukPage({ searchParams }: PageProps) {
   // Use cached profile directly — correct user's profile with .eq('id', user.id)
   const activeProfile: Profile = profile || {
     id: '',
+    tenant_id: '',
     full_name: 'Staff Member',
     role: 'staff',
     created_at: new Date().toISOString(),

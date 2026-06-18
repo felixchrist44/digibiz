@@ -60,7 +60,7 @@ export async function updateSession(request: NextRequest) {
   if (user) {
     const { data } = await supabase
       .from('profiles')
-      .select('id, full_name, role, created_at')
+      .select('id, tenant_id, full_name, role, created_at')
       .eq('id', user.id)
       .single();
     profile = data;
@@ -72,6 +72,7 @@ export async function updateSession(request: NextRequest) {
     requestHeaders.set('x-user-id', user.id);
     requestHeaders.set('x-user-email', user.email || '');
     if (profile) {
+      requestHeaders.set('x-user-tenant-id', profile.tenant_id || '');
       requestHeaders.set('x-user-full-name', profile.full_name || '');
       requestHeaders.set('x-user-role', profile.role || '');
       requestHeaders.set('x-user-created-at', profile.created_at || '');

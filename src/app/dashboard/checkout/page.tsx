@@ -34,7 +34,7 @@ const MOCK_PRODUCTS = [
   { id: 'mock-6', nama: 'Pringles Original 107g', harga: 24500, kode_produk: '8991002005006' }
 ];
 
-const emptySubscribe = () => () => {};
+const emptySubscribe = () => () => { };
 const getClientSnapshot = () => true;
 const getServerSnapshot = () => false;
 
@@ -52,6 +52,31 @@ export default function CheckoutPage() {
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
   const [socketStatus, setSocketStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const [tenantId, setTenantId] = useState<string | null>(null);
+
+  // Fetch tenantId on mount (reads JWT session first, fallback to profiles)
+  useEffect(() => {
+    if (!mounted) return;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const jwtTenantId = session?.user?.app_metadata?.tenant_id;
+      if (jwtTenantId) {
+        setTenantId(jwtTenantId);
+      } else {
+        supabase.auth.getUser().then(({ data: { user } }) => {
+          if (user) {
+            supabase
+              .from('profiles')
+              .select('tenant_id')
+              .eq('id', user.id)
+              .single()
+              .then(({ data }) => {
+                if (data?.tenant_id) setTenantId(data.tenant_id);
+              });
+          }
+        });
+      }
+    });
+  }, [mounted, supabase]);
 
   // Track latest cartItems in a ref to avoid asynchronous race conditions in state check
   const cartItemsRef = useRef<CartItem[]>([]);
@@ -61,7 +86,7 @@ export default function CheckoutPage() {
 
   // Client-Side Request Cache
   const productCacheRef = useRef<Record<string, { id: string; name: string; price: number; sku: string }>>({});
-  
+
   // Cooldown dictionary to prevent rapid hardware double trigger scan signals (ghost scans)
   const lastScanTimeRef = useRef<Record<string, number>>({});
 
@@ -243,7 +268,7 @@ export default function CheckoutPage() {
       if (e.key === 'Enter') {
         const now = performance.now();
         const buffer = keyBufferRef.current;
-        
+
         if (buffer.length > 0) {
           // Check inter-character timings (<35ms) to verify it is scanner hardware
           let isScanner = true;
@@ -263,7 +288,7 @@ export default function CheckoutPage() {
           if (isScanner && buffer.length >= 3) {
             e.preventDefault();
             const sku = buffer.map(b => b.char).join('');
-            
+
             // Wipe focused input fields to prevent input clogging
             if (isInputFocused && activeEl) {
               (activeEl as HTMLInputElement).value = '';
@@ -276,7 +301,7 @@ export default function CheckoutPage() {
         keyBufferRef.current = [];
       } else if (e.key.length === 1) {
         const now = performance.now();
-        
+
         // If there is an idle delay > 35ms since last key, reset buffer (it is manual typing)
         if (keyBufferRef.current.length > 0) {
           const lastTime = keyBufferRef.current[keyBufferRef.current.length - 1].time;
@@ -296,9 +321,9 @@ export default function CheckoutPage() {
 
   // Supabase Realtime Channel Subscription (Optimized with self: false parameter filtering) (Bug 3 Fix: uses memoized client)
   useEffect(() => {
-    if (!mounted) return;
+    if (!mounted || !tenantId) return;
 
-    const channel = supabase.channel('inventory-checkout-room', {
+    const channel = supabase.channel(`inventory-checkout-${tenantId}`, {
       config: {
         broadcast: { self: false } // Avoid self-broadcast feedback loops
       }
@@ -314,7 +339,6 @@ export default function CheckoutPage() {
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
           setSocketStatus('connected');
-          console.log('Realtime socket client listening to inventory-checkout-room channel');
         } else if (status === 'TIMED_OUT' || status === 'CLOSED') {
           setSocketStatus('disconnected');
         }
@@ -323,7 +347,7 @@ export default function CheckoutPage() {
     return () => {
       channel.unsubscribe();
     };
-  }, [mounted, supabase]);
+  }, [mounted, tenantId, supabase]);
 
   // Read URL query scan parameter on mount (redirect fallback support) (Bug 4 Fix)
   useEffect(() => {
@@ -395,10 +419,10 @@ export default function CheckoutPage() {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 bg-slate-900 min-h-screen text-white p-6 md:p-8 rounded-3xl border border-slate-800 shadow-2xl">
-      
+
       {/* LEFT / CENTER PANELS: Ledger table (2 columns wide) */}
       <div className="lg:col-span-2 space-y-6">
-        
+
         {/* Table Title and Status Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-slate-800 pb-5 gap-3">
           <div>
@@ -413,14 +437,20 @@ export default function CheckoutPage() {
 
           {/* WebSocket state tag */}
           <div className="flex items-center gap-2">
-            <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border flex items-center gap-1.5 ${
-              socketStatus === 'connected'
-                ? 'bg-emerald-950/40 border-emerald-900/50 text-emerald-400'
-                : 'bg-red-950/40 border-red-900/50 text-red-400'
-            }`}>
-              <Wifi className="h-3.5 w-3.5" />
-              {socketStatus === 'connected' ? 'Soket Online' : 'Soket Offline'}
-            </span>
+            {tenantId === null ? (
+              <span className="px-2.5 py-1 rounded-full text-[10px] font-bold border flex items-center gap-1.5 bg-amber-950/40 border-amber-900/50 text-amber-400 animate-pulse">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Memuat sesi...
+              </span>
+            ) : (
+              <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border flex items-center gap-1.5 ${socketStatus === 'connected'
+                  ? 'bg-emerald-950/40 border-emerald-900/50 text-emerald-400'
+                  : 'bg-red-950/40 border-red-900/50 text-red-400'
+                }`}>
+                <Wifi className="h-3.5 w-3.5" />
+                {socketStatus === 'connected' ? 'Soket Online' : 'Soket Offline'}
+              </span>
+            )}
 
             {isSearching && (
               <span className="flex items-center gap-1 text-[10px] text-indigo-400 font-bold">
@@ -474,7 +504,7 @@ export default function CheckoutPage() {
                     <tr key={item.id} className="hover:bg-slate-900/10 transition-colors">
                       <td className="py-4 px-5 font-bold text-white">{item.name}</td>
                       <td className="py-4 px-5 font-mono text-[10px] text-slate-400">{item.sku}</td>
-                      
+
                       {/* Quantity adjusting buttons */}
                       <td className="py-4 px-5">
                         <div className="flex items-center justify-center gap-2 bg-slate-900 border border-slate-800 rounded-lg p-1 w-24 mx-auto">
@@ -499,7 +529,7 @@ export default function CheckoutPage() {
                       <td className="py-4 px-5 text-right font-black text-indigo-400">
                         {formatIDR(item.price * item.quantity)}
                       </td>
-                      
+
                       <td className="py-4 px-5 text-center">
                         <button
                           onClick={() => deleteItem(item.sku)}
@@ -519,7 +549,7 @@ export default function CheckoutPage() {
 
       {/* RIGHT SIDEBAR PANEL: Summary layout (1 column wide) */}
       <div className="space-y-6">
-        
+
         {/* locked summary card component */}
         <div className="bg-slate-950/40 border border-slate-800/80 rounded-2xl p-6 shadow-xl space-y-6">
           <h2 className="text-sm font-black text-slate-450 uppercase tracking-widest pb-3 border-b border-slate-850">
@@ -527,7 +557,7 @@ export default function CheckoutPage() {
           </h2>
 
           <div className="space-y-4 text-xs font-semibold text-slate-400">
-            
+
             {/* Subtotal */}
             <div className="flex justify-between items-center">
               <span>Subtotal</span>

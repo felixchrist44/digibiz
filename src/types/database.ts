@@ -2,6 +2,7 @@ export type UserRole = 'owner' | 'staff';
 
 export interface Profile {
   id: string;
+  tenant_id: string;
   full_name: string | null;
   role: UserRole;
   created_at: string;

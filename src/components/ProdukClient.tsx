@@ -138,16 +138,16 @@ export default function ProdukClient({
       const ctx = new AudioContextClass();
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      
+
       osc.connect(gain);
       gain.connect(ctx.destination);
-      
+
       osc.type = 'sine';
       osc.frequency.setValueAtTime(800, ctx.currentTime);
-      
+
       gain.gain.setValueAtTime(0.12, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
-      
+
       osc.start(ctx.currentTime);
       osc.stop(ctx.currentTime + 0.12);
     } catch (err) {
@@ -156,7 +156,7 @@ export default function ProdukClient({
   };
 
   const handleIncomingBarcodeRef = useRef<((sku: string) => Promise<void>) | null>(null);
-  
+
   const handleIncomingBarcode = async (sku: string) => {
     const trimmedSku = sku.trim();
     if (!trimmedSku) return;
@@ -166,7 +166,7 @@ export default function ProdukClient({
 
     // 1. Local Lookup
     const matchedLocal = initialProducts.find(p => p.kode_produk.toLowerCase() === trimmedSku.toLowerCase());
-    
+
     if (matchedLocal) {
       const itemInfo = {
         id: matchedLocal.id,
@@ -174,7 +174,7 @@ export default function ProdukClient({
         price: Number(matchedLocal.harga),
         sku: matchedLocal.kode_produk
       };
-      
+
       setCart(prevCart => {
         const idx = prevCart.findIndex(c => c.sku.toLowerCase() === itemInfo.sku.toLowerCase());
         if (idx > -1) {
@@ -207,7 +207,7 @@ export default function ProdukClient({
             price: Number(data.harga),
             sku: data.kode_produk
           };
-          
+
           setCart(prevCart => {
             const idx = prevCart.findIndex(c => c.sku.toLowerCase() === itemInfo.sku.toLowerCase());
             if (idx > -1) {
@@ -246,10 +246,11 @@ export default function ProdukClient({
 
   // Realtime Broadcast Channel Listener
   useEffect(() => {
-    if (!posModeActive) return;
+    if (!posModeActive || !profile?.tenant_id) return;
 
     const supabase = createClient();
-    const channel = supabase.channel('inventory-checkout-room', {
+    const channelName = `inventory-checkout-${profile.tenant_id}`;
+    const channel = supabase.channel(channelName, {
       config: {
         broadcast: { self: false }
       }
@@ -265,7 +266,6 @@ export default function ProdukClient({
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
           setSocketStatus('connected');
-          console.log('Realtime POS: Subscribed to channel successfully.');
         } else {
           setSocketStatus('disconnected');
         }
@@ -274,11 +274,11 @@ export default function ProdukClient({
     return () => {
       channel.unsubscribe();
     };
-  }, [posModeActive]);
+  }, [posModeActive, profile?.tenant_id]);
 
   // Cart operations
   const updateQty = (sku: string, delta: number) => {
-    setCart(prev => 
+    setCart(prev =>
       prev
         .map(item => {
           if (item.sku.toLowerCase() === sku.toLowerCase()) {
@@ -408,12 +408,12 @@ export default function ProdukClient({
             {posModeActive ? 'Kasir & POS Checkout' : 'Daftar Inventaris Produk'}
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            {posModeActive 
-              ? 'Pindai barcode produk melalui smartphone untuk checkout secara otomatis.' 
+            {posModeActive
+              ? 'Pindai barcode produk melalui smartphone untuk checkout secara otomatis.'
               : 'Kelola dan pantau seluruh produk beserta harga jual barang.'}
           </p>
         </div>
-        
+
         <div className="flex items-center gap-3 flex-wrap">
           {/* POS Mode Switcher Button */}
           <button
@@ -427,11 +427,10 @@ export default function ProdukClient({
               }
               clearCart();
             }}
-            className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-150 active:scale-[0.98] border ${
-              posModeActive
-                ? 'bg-indigo-650 border-indigo-600 text-white shadow-lg shadow-indigo-650/25'
-                : 'bg-slate-900/50 border-slate-800 text-slate-300 hover:bg-slate-855 hover:text-white'
-            }`}
+            className={`flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all duration-150 active:scale-[0.98] border ${posModeActive
+              ? 'bg-indigo-650 border-indigo-600 text-white shadow-lg shadow-indigo-650/25'
+              : 'bg-slate-900/50 border-slate-800 text-slate-300 hover:bg-slate-855 hover:text-white'
+              }`}
           >
             <ShoppingCart className="h-4 w-4" />
             {posModeActive ? 'Kembali ke Inventaris' : 'Mode POS Kasir'}
@@ -469,7 +468,7 @@ export default function ProdukClient({
           {/* Left Column: Interactive Shopping Cart (2 columns wide) */}
           <div className="lg:col-span-2 space-y-6">
             <div className="bg-slate-900/40 border border-slate-800/80 backdrop-blur rounded-3xl p-6 shadow-xl relative overflow-hidden flex flex-col min-h-[500px]">
-              
+
               {/* Cart Header */}
               <div className="flex items-center justify-between border-b border-slate-850 pb-4 mb-4">
                 <div className="flex items-center gap-2.5">
@@ -557,18 +556,17 @@ export default function ProdukClient({
                       <span>Subtotal</span>
                       <span className="text-slate-200">{formatIDR(subtotal)}</span>
                     </div>
-                    
+
                     <div className="flex justify-between items-center border-t border-dashed border-slate-850/50 pt-2">
                       <div className="flex items-center gap-2">
                         <span>PPN (11%)</span>
                         <button
                           type="button"
                           onClick={() => setIncludeTax(!includeTax)}
-                          className={`text-[9px] px-2 py-0.5 rounded-full border transition-all cursor-pointer ${
-                            includeTax
-                              ? 'bg-indigo-600/10 border-indigo-500/30 text-indigo-400 font-bold'
-                              : 'bg-slate-950/40 border-slate-800 text-slate-500 font-normal'
-                          }`}
+                          className={`text-[9px] px-2 py-0.5 rounded-full border transition-all cursor-pointer ${includeTax
+                            ? 'bg-indigo-600/10 border-indigo-500/30 text-indigo-400 font-bold'
+                            : 'bg-slate-950/40 border-slate-800 text-slate-500 font-normal'
+                            }`}
                         >
                           {includeTax ? 'Aktif' : 'Nonaktif'}
                         </button>
@@ -609,22 +607,21 @@ export default function ProdukClient({
           {/* Right Column: Running history log of raw scanned barcodes (1 column wide) */}
           <div className="space-y-6">
             <div className="bg-slate-900/40 border border-slate-800/80 backdrop-blur rounded-3xl p-6 shadow-xl flex flex-col min-h-[500px]">
-              
+
               {/* Scan Log Header */}
               <div className="flex items-center justify-between border-b border-slate-855 pb-4 mb-4">
                 <div className="flex items-center gap-2">
                   <Clock className="h-5 w-5 text-indigo-400" />
                   <h3 className="text-sm font-bold text-white">Live Barcode Log</h3>
                 </div>
-                
+
                 {/* Connection Status Badge */}
-                <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider border flex items-center gap-1.5 transition-all ${
-                  socketStatus === 'connected'
-                    ? 'bg-emerald-950/40 border-emerald-900/50 text-emerald-400'
-                    : socketStatus === 'connecting'
+                <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider border flex items-center gap-1.5 transition-all ${socketStatus === 'connected'
+                  ? 'bg-emerald-950/40 border-emerald-900/50 text-emerald-400'
+                  : socketStatus === 'connecting'
                     ? 'bg-amber-950/40 border-amber-900/50 text-amber-400 animate-pulse'
                     : 'bg-red-950/40 border-red-900/50 text-red-400'
-                }`}>
+                  }`}>
                   <Wifi className="h-3 w-3" />
                   {socketStatus === 'connected' ? 'Connected' : socketStatus === 'connecting' ? 'Connecting' : 'Disconnected'}
                 </span>
@@ -646,17 +643,16 @@ export default function ProdukClient({
                   scannedList.map((log, index) => (
                     <div
                       key={index}
-                      className={`p-3 rounded-2xl border transition-all animate-in slide-in-from-top-4 duration-300 ${
-                        log.matched
-                          ? 'bg-slate-950/40 border-slate-850/85 hover:border-slate-800'
-                          : 'bg-amber-950/10 border-amber-900/20 hover:border-amber-900/30'
-                      }`}
+                      className={`p-3 rounded-2xl border transition-all animate-in slide-in-from-top-4 duration-300 ${log.matched
+                        ? 'bg-slate-950/40 border-slate-850/85 hover:border-slate-800'
+                        : 'bg-amber-950/10 border-amber-900/20 hover:border-amber-900/30'
+                        }`}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-mono font-black text-white">{log.barcode}</span>
                         <span className="text-[9px] text-slate-500 font-semibold">{log.timestamp}</span>
                       </div>
-                      
+
                       {/* Match Status Badge */}
                       <div className="mt-2 flex items-center gap-1.5">
                         {log.matched ? (
@@ -748,117 +744,116 @@ export default function ProdukClient({
           ) : (
             <div className={`flex flex-col gap-4 w-full transition-all duration-200 ${isPending ? 'opacity-50 pointer-events-none' : ''}`}>
               {filteredProducts.map((p) => {
-            const isLow = p.stok_saat_ini <= 5;
-            const isOut = p.stok_saat_ini === 0;
+                const isLow = p.stok_saat_ini <= 5;
+                const isOut = p.stok_saat_ini === 0;
 
-            return (
-              <div
-                key={p.id}
-                className="bg-slate-900/40 backdrop-blur border border-slate-800/80 rounded-2xl p-4 hover:border-slate-700/60 shadow-xl transition-all duration-200 flex flex-col md:flex-row md:items-center justify-between gap-4 w-full"
-              >
-                {/* Left Side: Thumbnail & Title Metadata */}
-                <div className="flex items-center gap-4 flex-1 min-w-0">
-                  {/* Thumbnail Image from Supabase Storage */}
-                  <div className="h-14 w-14 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
-                    {p.gambar_url ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={p.gambar_url}
-                        alt={p.nama}
-                        className="h-full w-full object-cover"
-                        loading="lazy"
-                      />
-                    ) : (
-                      <Package className="h-6 w-6 text-slate-550" />
-                    )}
-                  </div>
+                return (
+                  <div
+                    key={p.id}
+                    className="bg-slate-900/40 backdrop-blur border border-slate-800/80 rounded-2xl p-4 hover:border-slate-700/60 shadow-xl transition-all duration-200 flex flex-col md:flex-row md:items-center justify-between gap-4 w-full"
+                  >
+                    {/* Left Side: Thumbnail & Title Metadata */}
+                    <div className="flex items-center gap-4 flex-1 min-w-0">
+                      {/* Thumbnail Image from Supabase Storage */}
+                      <div className="h-14 w-14 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
+                        {p.gambar_url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={p.gambar_url}
+                            alt={p.nama}
+                            className="h-full w-full object-cover"
+                            loading="lazy"
+                          />
+                        ) : (
+                          <Package className="h-6 w-6 text-slate-550" />
+                        )}
+                      </div>
 
-                  {/* Title details */}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-[9px] font-mono font-bold bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded border border-slate-750">
-                        {p.kode_produk}
-                      </span>
-                      {isLow && (
-                        <span className={`inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                          isOut ? 'bg-red-500/10 text-red-400 border border-red-500/10' : 'bg-amber-500/10 text-amber-400 border border-amber-500/10'
-                        }`}>
-                          <AlertTriangle className="h-3.5 w-3.5" />
-                          {isOut ? 'Habis' : 'Stok Tipis'}
-                        </span>
+                      {/* Title details */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[9px] font-mono font-bold bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded border border-slate-750">
+                            {p.kode_produk}
+                          </span>
+                          {isLow && (
+                            <span className={`inline-flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full ${isOut ? 'bg-red-500/10 text-red-400 border border-red-500/10' : 'bg-amber-500/10 text-amber-400 border border-amber-500/10'
+                              }`}>
+                              <AlertTriangle className="h-3.5 w-3.5" />
+                              {isOut ? 'Habis' : 'Stok Tipis'}
+                            </span>
+                          )}
+                        </div>
+                        <h3 className="text-base font-bold text-white tracking-tight mt-1.5 truncate">{p.nama}</h3>
+                        <p className="text-xs text-slate-450 line-clamp-1 mt-0.5">{p.deskripsi || 'Tidak ada deskripsi produk.'}</p>
+                      </div>
+                    </div>
+
+                    {/* Middle Section: Price & Stock side by side */}
+                    <div className="flex items-center gap-6 md:gap-12 shrink-0 border-t border-slate-850/50 pt-3 md:pt-0 md:border-0 justify-between md:justify-end">
+                      {isOwner && (
+                        <div className="space-y-0.5 min-w-[100px]">
+                          <span className="text-[9px] text-slate-450 font-semibold uppercase tracking-wider block">Harga Modal</span>
+                          <p className="text-sm font-extrabold text-emerald-400">{formatIDR(Number(p.harga_modal || 0))}</p>
+                        </div>
+                      )}
+                      <div className="space-y-0.5 min-w-[100px]">
+                        <span className="text-[9px] text-slate-450 font-semibold uppercase tracking-wider block">Harga Jual</span>
+                        <p className="text-sm font-extrabold text-indigo-400">{formatIDR(Number(p.harga))}</p>
+                      </div>
+                      <div className="space-y-0.5 text-right md:text-left min-w-[80px]">
+                        <span className="text-[9px] text-slate-450 font-semibold uppercase tracking-wider block">Stok Saat Ini</span>
+                        <p className={`text-sm font-extrabold ${isOut ? 'text-red-400 font-black' : isLow ? 'text-amber-400 font-bold' : 'text-slate-200'}`}>
+                          {p.stok_saat_ini} Pcs
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Right Side: Printing, Editing & Deleting Actions */}
+                    <div className="flex items-center justify-end gap-2 shrink-0 border-t border-slate-850/50 pt-3 md:pt-0 md:border-0">
+                      {/* Barcode Print trigger */}
+                      <button
+                        onClick={() => {
+                          setSelectedBarcodeProduct(p);
+                          setIsBarcodeOpen(true);
+                        }}
+                        className="p-2 rounded-lg bg-slate-950/40 border border-slate-800 hover:border-indigo-500/30 text-slate-400 hover:text-indigo-400 transition-colors"
+                        title="Cetak Barcode Label"
+                      >
+                        <BarcodeIcon className="h-4 w-4" />
+                      </button>
+
+                      {/* Edit */}
+                      <button
+                        onClick={() => {
+                          setCurrentProduct(p);
+                          setErrorMessage(null);
+                          setSuccessMessage(null);
+                          setImagePreviewUrl(p.gambar_url);
+                          setIsEditOpen(true);
+                        }}
+                        className="p-2 rounded-lg bg-slate-950/40 border border-slate-800 hover:border-indigo-500/30 text-slate-400 hover:text-indigo-400 transition-colors"
+                        title="Ubah Produk"
+                      >
+                        <Edit2 className="h-4 w-4" />
+                      </button>
+
+                      {/* Delete */}
+                      {isOwner && (
+                        <button
+                          onClick={() => handleDelete(p.id)}
+                          className="p-2 rounded-lg bg-slate-950/40 border border-slate-800 hover:border-red-500/30 text-slate-450 hover:text-red-450 transition-colors"
+                          title="Hapus Produk"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
                       )}
                     </div>
-                    <h3 className="text-base font-bold text-white tracking-tight mt-1.5 truncate">{p.nama}</h3>
-                    <p className="text-xs text-slate-450 line-clamp-1 mt-0.5">{p.deskripsi || 'Tidak ada deskripsi produk.'}</p>
                   </div>
-                </div>
+                );
+              })}
+            </div>
+          )}
 
-                {/* Middle Section: Price & Stock side by side */}
-                <div className="flex items-center gap-6 md:gap-12 shrink-0 border-t border-slate-850/50 pt-3 md:pt-0 md:border-0 justify-between md:justify-end">
-                  {isOwner && (
-                    <div className="space-y-0.5 min-w-[100px]">
-                      <span className="text-[9px] text-slate-450 font-semibold uppercase tracking-wider block">Harga Modal</span>
-                      <p className="text-sm font-extrabold text-emerald-400">{formatIDR(Number(p.harga_modal || 0))}</p>
-                    </div>
-                  )}
-                  <div className="space-y-0.5 min-w-[100px]">
-                    <span className="text-[9px] text-slate-450 font-semibold uppercase tracking-wider block">Harga Jual</span>
-                    <p className="text-sm font-extrabold text-indigo-400">{formatIDR(Number(p.harga))}</p>
-                  </div>
-                  <div className="space-y-0.5 text-right md:text-left min-w-[80px]">
-                    <span className="text-[9px] text-slate-450 font-semibold uppercase tracking-wider block">Stok Saat Ini</span>
-                    <p className={`text-sm font-extrabold ${isOut ? 'text-red-400 font-black' : isLow ? 'text-amber-400 font-bold' : 'text-slate-200'}`}>
-                      {p.stok_saat_ini} Pcs
-                    </p>
-                  </div>
-                </div>
-
-                {/* Right Side: Printing, Editing & Deleting Actions */}
-                <div className="flex items-center justify-end gap-2 shrink-0 border-t border-slate-850/50 pt-3 md:pt-0 md:border-0">
-                  {/* Barcode Print trigger */}
-                  <button
-                    onClick={() => {
-                      setSelectedBarcodeProduct(p);
-                      setIsBarcodeOpen(true);
-                    }}
-                    className="p-2 rounded-lg bg-slate-950/40 border border-slate-800 hover:border-indigo-500/30 text-slate-400 hover:text-indigo-400 transition-colors"
-                    title="Cetak Barcode Label"
-                  >
-                    <BarcodeIcon className="h-4 w-4" />
-                  </button>
-
-                  {/* Edit */}
-                  <button
-                    onClick={() => {
-                      setCurrentProduct(p);
-                      setErrorMessage(null);
-                      setSuccessMessage(null);
-                      setImagePreviewUrl(p.gambar_url);
-                      setIsEditOpen(true);
-                    }}
-                    className="p-2 rounded-lg bg-slate-950/40 border border-slate-800 hover:border-indigo-500/30 text-slate-400 hover:text-indigo-400 transition-colors"
-                    title="Ubah Produk"
-                  >
-                    <Edit2 className="h-4 w-4" />
-                  </button>
-
-                  {/* Delete */}
-                  {isOwner && (
-                    <button
-                      onClick={() => handleDelete(p.id)}
-                      className="p-2 rounded-lg bg-slate-950/40 border border-slate-800 hover:border-red-500/30 text-slate-450 hover:text-red-450 transition-colors"
-                      title="Hapus Produk"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-          
           {/* Visual Pagination Footer */}
           {(() => {
             const hasPrevious = currentPage > 1;
@@ -1137,11 +1132,10 @@ export default function ProdukClient({
                       min="0"
                       defaultValue={Number(currentProduct.harga)}
                       disabled={!isOwner}
-                      className={`w-full pl-9 pr-3 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${
-                        isOwner
-                          ? 'bg-slate-950/40 border-slate-800 text-slate-200'
-                          : 'bg-slate-950/20 border-slate-850 text-slate-500 cursor-not-allowed'
-                      }`}
+                      className={`w-full pl-9 pr-3 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isOwner
+                        ? 'bg-slate-950/40 border-slate-800 text-slate-200'
+                        : 'bg-slate-950/20 border-slate-850 text-slate-500 cursor-not-allowed'
+                        }`}
                     />
                   </div>
                   {!isOwner && (

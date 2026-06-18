@@ -37,9 +37,14 @@ export async function signup(prevState: any, formData: FormData) {
   const password = formData.get('password') as string;
   const fullName = formData.get('fullName') as string;
   const inviteToken = formData.get('inviteToken') as string;
+  const namaToko = formData.get('namaToko') as string;
 
   if (!email || !password || !fullName) {
     return { error: 'Semua kolom wajib diisi.' };
+  }
+
+  if (!inviteToken && !namaToko) {
+    return { error: 'Nama toko wajib diisi untuk pendaftaran baru.' };
   }
 
   if (password.length < 6) {
@@ -56,6 +61,7 @@ export async function signup(prevState: any, formData: FormData) {
         full_name: fullName,
         role: inviteToken ? 'staff' : 'owner',
         invite_token: inviteToken || undefined,
+        nama_toko: inviteToken ? undefined : (namaToko || 'Toko Baru'),
       },
     },
   });
