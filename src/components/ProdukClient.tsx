@@ -252,7 +252,8 @@ export default function ProdukClient({
     const channelName = `inventory-checkout-${profile.tenant_id}`;
     const channel = supabase.channel(channelName, {
       config: {
-        broadcast: { self: false }
+        broadcast: { self: false },
+        private: true
       }
     });
 
@@ -263,9 +264,12 @@ export default function ProdukClient({
           handleIncomingBarcodeRef.current(sku);
         }
       })
-      .subscribe((status) => {
+      .subscribe((status, err) => {
         if (status === 'SUBSCRIBED') {
           setSocketStatus('connected');
+        } else if (status === 'CHANNEL_ERROR') {
+          console.error(`Realtime subscription error for channel ${channelName}:`, err);
+          setSocketStatus('disconnected');
         } else {
           setSocketStatus('disconnected');
         }

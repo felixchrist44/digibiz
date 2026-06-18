@@ -1,5 +1,5 @@
 import React from 'react';
-import { createClient } from '@/utils/supabase/server';
+import { getAuthenticatedUser } from '@/utils/supabase/auth';
 import PenjualanClient from '@/components/PenjualanClient';
 import { Produk } from '@/types/database';
 
@@ -10,7 +10,7 @@ interface PageProps {
 }
 
 export default async function PenjualanPage({ searchParams }: PageProps) {
-  const supabase = await createClient();
+  const { profile, supabase } = await getAuthenticatedUser();
 
   const params = await searchParams;
   const page = Number(params.page || '1');
@@ -43,6 +43,7 @@ export default async function PenjualanPage({ searchParams }: PageProps) {
       initialInvoices={(invoices as any[]) || []}
       hasMore={hasMore}
       currentPage={page}
+      profile={profile}
     />
   );
 }

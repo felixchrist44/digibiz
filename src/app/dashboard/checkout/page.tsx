@@ -51,7 +51,7 @@ export default function CheckoutPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [infoMsg, setInfoMsg] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
-  const [socketStatus, setSocketStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  const [socketStatus, setSocketStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
   const [tenantId, setTenantId] = useState<string | null>(null);
 
   // Fetch tenantId on mount (reads JWT session first, fallback to profiles)
@@ -319,35 +319,7 @@ export default function CheckoutPage() {
     };
   }, [mounted]);
 
-  // Supabase Realtime Channel Subscription (Optimized with self: false parameter filtering) (Bug 3 Fix: uses memoized client)
-  useEffect(() => {
-    if (!mounted || !tenantId) return;
-
-    const channel = supabase.channel(`inventory-checkout-${tenantId}`, {
-      config: {
-        broadcast: { self: false } // Avoid self-broadcast feedback loops
-      }
-    });
-
-    channel
-      .on('broadcast', { event: 'barcode-scanned' }, (payload) => {
-        const sku = payload.payload?.sku;
-        if (sku) {
-          handleIncomingBarcodeRef.current(sku);
-        }
-      })
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          setSocketStatus('connected');
-        } else if (status === 'TIMED_OUT' || status === 'CLOSED') {
-          setSocketStatus('disconnected');
-        }
-      });
-
-    return () => {
-      channel.unsubscribe();
-    };
-  }, [mounted, tenantId, supabase]);
+  // Realtime subscription retired: scans retargeted to Transaksi Penjualan (PenjualanClient.tsx)
 
   // Read URL query scan parameter on mount (redirect fallback support) (Bug 4 Fix)
   useEffect(() => {

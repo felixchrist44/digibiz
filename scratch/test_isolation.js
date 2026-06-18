@@ -104,7 +104,7 @@ async function runTest() {
 
   console.log(`🔌 Connecting User A to channel: ${channelNameA}`);
   let receivedByA = [];
-  const chanA = clientA.channel(channelNameA, { config: { broadcast: { self: false } } });
+  const chanA = clientA.channel(channelNameA, { config: { broadcast: { self: false }, private: true } });
   chanA.on('broadcast', { event: 'barcode-scanned' }, (payload) => {
     console.log('⚠️ USER A RECEIVED SCAN EVENT:', payload);
     receivedByA.push(payload);
@@ -119,7 +119,7 @@ async function runTest() {
 
   console.log(`🔌 Connecting User B to channel: ${channelNameB}`);
   let receivedByB = [];
-  const chanB = clientB.channel(channelNameB, { config: { broadcast: { self: false } } });
+  const chanB = clientB.channel(channelNameB, { config: { broadcast: { self: false, ack: true }, private: true } });
   chanB.on('broadcast', { event: 'barcode-scanned' }, (payload) => {
     console.log('🎯 USER B RECEIVED SCAN EVENT:', payload);
     receivedByB.push(payload);
@@ -164,7 +164,7 @@ async function runTest() {
   });
 
   let checkoutBReceived = [];
-  const checkoutChanB = checkoutClientB.channel(channelNameB, { config: { broadcast: { self: false } } });
+  const checkoutChanB = checkoutClientB.channel(channelNameB, { config: { broadcast: { self: false }, private: true } });
   checkoutChanB.on('broadcast', { event: 'barcode-scanned' }, (payload) => {
     console.log('🎯 CHECKOUT B RECEIVED EVENT:', payload);
     checkoutBReceived.push(payload);

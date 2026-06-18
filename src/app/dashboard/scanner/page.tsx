@@ -74,7 +74,8 @@ export default function MobileScannerPage() {
 
     const channel = supabase.channel(`inventory-checkout-${tenantId}`, {
       config: {
-        broadcast: { self: false } // Avoid self-broadcast feedback loops
+        broadcast: { self: false, ack: true },
+        private: true
       }
     });
 
@@ -96,7 +97,7 @@ export default function MobileScannerPage() {
   }, [mounted, tenantId, supabase]);
 
   // Main callback for successful barcode scans
-  const handleScanSuccess = (decodedText: string) => {
+  const handleScanSuccess = async (decodedText: string) => {
     const trimmedCode = decodedText.trim();
     if (!trimmedCode) return;
 
@@ -109,12 +110,12 @@ export default function MobileScannerPage() {
 
     // 1. Broadcast the scanned SKU via Supabase Realtime channel
     if (channelRef.current && connectionStatusRef.current === 'connected') {
-      channelRef.current.send({
+      const res = await channelRef.current.send({
         type: 'broadcast',
         event: 'barcode-scanned',
         payload: { sku: trimmedCode }
       });
-      setBroadcastSuccess(true);
+      setBroadcastSuccess(res === 'ok');
     } else {
       setBroadcastSuccess(false);
     }

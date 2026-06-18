@@ -15,15 +15,17 @@ import {
   Printer,
   History,
   Info,
-  ArrowRight
+  ArrowRight,
+  Wifi
 } from 'lucide-react';
-import { Produk, Penjualan, DetailPenjualan } from '@/types/database';
+import { Produk, Penjualan, DetailPenjualan, Profile } from '@/types/database';
 
 interface Props {
   products: Produk[];
   initialInvoices: Penjualan[];
   hasMore: boolean;
   currentPage: number;
+  profile: Profile | null;
 }
 
 interface CartItem {
@@ -49,7 +51,8 @@ export default function PenjualanClient({
   products: initialProducts,
   initialInvoices,
   hasMore,
-  currentPage
+  currentPage,
+  profile
 }: Props) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -62,6 +65,10 @@ export default function PenjualanClient({
   const [cashReceived, setCashReceived] = useState<string>('');
   const [invoices, setInvoices] = useState<Penjualan[]>(initialInvoices);
   const [isPending, startTransition] = useTransition();
+
+  const [socketStatus, setSocketStatus] = useState<'connecting' | 'connected' | 'disconnected'>(
+    profile?.tenant_id ? 'connecting' : 'disconnected'
+  );
 
   // Sync state values when props change directly in render (avoids cascading render effects)
   const [prevInitialInvoices, setPrevInitialInvoices] = useState(initialInvoices);
@@ -119,6 +126,77 @@ export default function PenjualanClient({
       return [...prev, { id: product.id, nama: product.nama, harga: Number(product.harga), jumlah: 1, maxStok: product.stok_saat_ini }];
     });
   };
+
+  // Handle incoming barcode scan via Supabase Realtime channel
+  const handleIncomingBarcode = async (sku: string) => {
+    if (!sku) return;
+    const trimmedSku = sku.trim();
+    
+    // 1. Search in current products list
+    let matchedProduct = initialProducts.find(
+      p => p.kode_produk?.toLowerCase() === trimmedSku.toLowerCase()
+    );
+
+    // 2. Fallback to direct DB query if not in initialProducts list (since initialProducts is paginated/limited)
+    if (!matchedProduct) {
+      try {
+        const supabase = createClient();
+        const { data, error } = await supabase
+          .from('produk')
+          .select('id, nama, kode_produk, harga, stok_saat_ini')
+          .eq('kode_produk', trimmedSku)
+          .maybeSingle();
+
+        if (error) {
+          console.error('Error querying product by SKU:', error);
+        } else if (data) {
+          matchedProduct = data as Produk;
+        }
+      } catch (err) {
+        console.error('Error during fallback product lookup:', err);
+      }
+    }
+
+    if (matchedProduct) {
+      addToCart(matchedProduct);
+    } else {
+      console.warn(`Produk dengan SKU/Kode "${trimmedSku}" tidak ditemukan.`);
+    }
+  };
+
+  const handleIncomingBarcodeRef = React.useRef(handleIncomingBarcode);
+  useEffect(() => {
+    handleIncomingBarcodeRef.current = handleIncomingBarcode;
+  });
+
+  useEffect(() => {
+    if (!profile?.tenant_id) return;
+
+    const supabase = createClient();
+    const channel = supabase.channel(`inventory-checkout-${profile.tenant_id}`, {
+      config: { broadcast: { self: false }, private: true }
+    });
+
+    channel
+      .on('broadcast', { event: 'barcode-scanned' }, (payload) => {
+        const sku = payload.payload?.sku;
+        if (sku) {
+          handleIncomingBarcodeRef.current(sku);
+        }
+      })
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          setSocketStatus('connected');
+        } else if (status === 'TIMED_OUT' || status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+          setSocketStatus('disconnected');
+          console.error(`Realtime subscription status: ${status}`);
+        }
+      });
+
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [profile?.tenant_id]);
 
   // Adjust quantity
   const updateQty = (id: string, delta: number) => {
@@ -318,11 +396,21 @@ export default function PenjualanClient({
 
           {/* Cart & Checkout Pane (col-span-5) */}
           <div className="lg:col-span-5 bg-slate-900/40 backdrop-blur border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
-            <div className="flex items-center gap-2 pb-3 border-b border-slate-850">
+            <div className="flex items-center gap-2 pb-3 border-b border-slate-850 flex-wrap">
               <ShoppingCart className="h-5 w-5 text-indigo-400" />
-              <h2 className="text-base font-bold text-white">Keranjang Belanja</h2>
+              <h2 className="text-base font-bold text-white mr-auto">Keranjang Belanja</h2>
+              <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold border flex items-center gap-1.5 ${
+                socketStatus === 'connected'
+                  ? 'bg-emerald-950/40 border-emerald-900/50 text-emerald-400'
+                  : socketStatus === 'connecting'
+                  ? 'bg-amber-950/40 border-amber-900/50 text-amber-400'
+                  : 'bg-red-950/40 border-red-900/50 text-red-400'
+              }`}>
+                <Wifi className="h-3.5 w-3.5" />
+                {socketStatus === 'connected' ? 'Soket Online' : socketStatus === 'connecting' ? 'Menghubungkan' : 'Soket Offline'}
+              </span>
               {cart.length > 0 && (
-                <span className="ml-auto px-2 py-0.5 bg-indigo-600 rounded-full text-[10px] font-black text-white">
+                <span className="px-2 py-0.5 bg-indigo-600 rounded-full text-[10px] font-black text-white">
                   {cart.length} Item
                 </span>
               )}

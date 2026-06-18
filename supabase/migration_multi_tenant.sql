@@ -487,4 +487,17 @@ CREATE TRIGGER trigger_sync_product_stock
 BEFORE INSERT ON public.stok_log
 FOR EACH ROW EXECUTE FUNCTION public.sync_product_stock();
 
+-- 18. Realtime broadcast authorization for tenant-scoped checkout channel
+ALTER TABLE realtime.messages ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "tenant_broadcast_access" ON realtime.messages;
+CREATE POLICY "tenant_broadcast_access" ON realtime.messages
+  FOR ALL TO authenticated
+  USING (
+    realtime.topic() = 'inventory-checkout-' || (auth.jwt() -> 'app_metadata' ->> 'tenant_id')
+  )
+  WITH CHECK (
+    realtime.topic() = 'inventory-checkout-' || (auth.jwt() -> 'app_metadata' ->> 'tenant_id')
+  );
+
 COMMIT;
