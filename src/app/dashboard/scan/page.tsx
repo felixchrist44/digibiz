@@ -129,6 +129,11 @@ export default function MobileScanPage() {
     }, 1500);
   };
 
+  const handleScanSuccessRef = useRef(handleScanSuccess);
+  useEffect(() => {
+    handleScanSuccessRef.current = handleScanSuccess;
+  });
+
   // Initialize Camera Stream Automatically on mount
   useEffect(() => {
     if (!mounted || !tenantId) return;
@@ -156,7 +161,7 @@ export default function MobileScanPage() {
         aspectRatio: 1.0 // Ideal square grid positioning on mobile screens
       },
       (decodedText) => {
-        handleScanSuccess(decodedText);
+        handleScanSuccessRef.current(decodedText);
       },
       (errorMessage) => {
         // Silent callback to avoid browser console spamming
