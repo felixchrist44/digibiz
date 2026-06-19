@@ -173,28 +173,43 @@ export default function PenjualanClient({
     if (!profile?.tenant_id) return;
 
     const supabase = createClient();
-    const channel = supabase.channel(`inventory-checkout-${profile.tenant_id}`, {
-      config: { broadcast: { self: false }, private: true }
-    });
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
 
-    channel
-      .on('broadcast', { event: 'barcode-scanned' }, (payload) => {
-        const sku = payload.payload?.sku;
-        if (sku) {
-          handleIncomingBarcodeRef.current(sku);
-        }
-      })
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          setSocketStatus('connected');
-        } else if (status === 'TIMED_OUT' || status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-          setSocketStatus('disconnected');
-          console.error(`Realtime subscription status: ${status}`);
-        }
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled) return;
+
+      if (session?.access_token) {
+        supabase.realtime.setAuth(session.access_token);
+      }
+
+      channel = supabase.channel(`inventory-checkout-${profile.tenant_id}`, {
+        config: { broadcast: { self: false }, private: false }
       });
 
+      channel
+        .on('broadcast', { event: 'barcode-scanned' }, (payload) => {
+          const sku = payload.payload?.sku;
+          if (sku) {
+            handleIncomingBarcodeRef.current(sku);
+          }
+        })
+        .subscribe((status) => {
+          if (status === 'SUBSCRIBED') {
+            setSocketStatus('connected');
+          } else if (status === 'TIMED_OUT' || status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+            setSocketStatus('disconnected');
+            console.error(`Realtime subscription status: ${status}`);
+          }
+        });
+    })();
+
     return () => {
-      channel.unsubscribe();
+      cancelled = true;
+      if (channel) {
+        channel.unsubscribe();
+      }
     };
   }, [profile?.tenant_id]);
 

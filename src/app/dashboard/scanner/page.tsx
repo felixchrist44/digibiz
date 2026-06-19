@@ -72,26 +72,39 @@ export default function MobileScannerPage() {
   useEffect(() => {
     if (!mounted || !tenantId) return;
 
-    const channel = supabase.channel(`inventory-checkout-${tenantId}`, {
-      config: {
-        broadcast: { self: false, ack: true },
-        private: true
-      }
-    });
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    let cancelled = false;
 
-    channel.subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        setConnectionStatus('connected');
-      } else if (status === 'TIMED_OUT' || status === 'CLOSED') {
-        setConnectionStatus('disconnected');
-      }
-    });
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled) return;
 
-    channelRef.current = channel;
+      if (session?.access_token) {
+        supabase.realtime.setAuth(session.access_token);
+      }
+
+      channel = supabase.channel(`inventory-checkout-${tenantId}`, {
+        config: {
+          broadcast: { self: false, ack: true },
+          private: false
+        }
+      });
+
+      channel.subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          setConnectionStatus('connected');
+        } else if (status === 'TIMED_OUT' || status === 'CLOSED') {
+          setConnectionStatus('disconnected');
+        }
+      });
+
+      channelRef.current = channel;
+    })();
 
     return () => {
-      if (channelRef.current) {
-        channelRef.current.unsubscribe();
+      cancelled = true;
+      if (channel) {
+        channel.unsubscribe();
       }
     };
   }, [mounted, tenantId, supabase]);

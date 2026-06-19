@@ -249,34 +249,49 @@ export default function ProdukClient({
     if (!posModeActive || !profile?.tenant_id) return;
 
     const supabase = createClient();
+    let channel: ReturnType<typeof supabase.channel> | null = null;
     const channelName = `inventory-checkout-${profile.tenant_id}`;
-    const channel = supabase.channel(channelName, {
-      config: {
-        broadcast: { self: false },
-        private: true
-      }
-    });
+    let cancelled = false;
 
-    channel
-      .on('broadcast', { event: 'barcode-scanned' }, (payload) => {
-        const sku = payload.payload?.sku;
-        if (sku && handleIncomingBarcodeRef.current) {
-          handleIncomingBarcodeRef.current(sku);
-        }
-      })
-      .subscribe((status, err) => {
-        if (status === 'SUBSCRIBED') {
-          setSocketStatus('connected');
-        } else if (status === 'CHANNEL_ERROR') {
-          console.error(`Realtime subscription error for channel ${channelName}:`, err);
-          setSocketStatus('disconnected');
-        } else {
-          setSocketStatus('disconnected');
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (cancelled) return;
+
+      if (session?.access_token) {
+        supabase.realtime.setAuth(session.access_token);
+      }
+
+      channel = supabase.channel(channelName, {
+        config: {
+          broadcast: { self: false },
+          private: false
         }
       });
 
+      channel
+        .on('broadcast', { event: 'barcode-scanned' }, (payload) => {
+          const sku = payload.payload?.sku;
+          if (sku && handleIncomingBarcodeRef.current) {
+            handleIncomingBarcodeRef.current(sku);
+          }
+        })
+        .subscribe((status, err) => {
+          if (status === 'SUBSCRIBED') {
+            setSocketStatus('connected');
+          } else if (status === 'CHANNEL_ERROR') {
+            console.error(`Realtime subscription error for channel ${channelName}:`, err);
+            setSocketStatus('disconnected');
+          } else {
+            setSocketStatus('disconnected');
+          }
+        });
+    })();
+
     return () => {
-      channel.unsubscribe();
+      cancelled = true;
+      if (channel) {
+        channel.unsubscribe();
+      }
     };
   }, [posModeActive, profile?.tenant_id]);
 
