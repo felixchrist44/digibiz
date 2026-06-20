@@ -58,6 +58,8 @@ export default function ProdukClient({
   const searchParams = useSearchParams();
   const pathname = usePathname();
 
+  const supabase = React.useMemo(() => createClient(), []);
+
   const [searchInput, setSearchInput] = useState(searchParams.get('search') || '');
   const [filter, setFilter] = useState<'all' | 'out' | 'low' | 'available'>(
     (searchParams.get('filter') as 'all' | 'out' | 'low' | 'available') || 'all'
@@ -193,7 +195,6 @@ export default function ProdukClient({
     } else {
       // 2. Database Lookup
       try {
-        const supabase = createClient();
         const { data, error } = await supabase
           .from('produk')
           .select('*')
@@ -244,13 +245,11 @@ export default function ProdukClient({
     handleIncomingBarcodeRef.current = handleIncomingBarcode;
   });
 
-  // Realtime Broadcast Channel Listener
+  // Realtime Stock-Tracking Database Changes Listener
   useEffect(() => {
-    if (!posModeActive || !profile?.tenant_id) return;
+    if (!profile?.tenant_id) return;
 
-    const supabase = createClient();
     let channel: ReturnType<typeof supabase.channel> | null = null;
-    const channelName = `inventory-checkout-${profile.tenant_id}`;
     let cancelled = false;
 
     (async () => {
@@ -261,26 +260,29 @@ export default function ProdukClient({
         supabase.realtime.setAuth(session.access_token);
       }
 
-      channel = supabase.channel(channelName, {
+      channel = supabase.channel(`produk-stock-changes-${profile.tenant_id}`, {
         config: {
-          broadcast: { self: false },
           private: false
         }
       });
 
       channel
-        .on('broadcast', { event: 'barcode-scanned' }, (payload) => {
-          const sku = payload.payload?.sku;
-          if (sku && handleIncomingBarcodeRef.current) {
-            handleIncomingBarcodeRef.current(sku);
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'produk',
+            filter: `tenant_id=eq.${profile.tenant_id}`
+          },
+          () => {
+            // Refresh server routes to pull updated stock numbers in realtime
+            router.refresh();
           }
-        })
-        .subscribe((status, err) => {
+        )
+        .subscribe((status) => {
           if (status === 'SUBSCRIBED') {
             setSocketStatus('connected');
-          } else if (status === 'CHANNEL_ERROR') {
-            console.error(`Realtime subscription error for channel ${channelName}:`, err);
-            setSocketStatus('disconnected');
           } else {
             setSocketStatus('disconnected');
           }
@@ -293,7 +295,7 @@ export default function ProdukClient({
         channel.unsubscribe();
       }
     };
-  }, [posModeActive, profile?.tenant_id]);
+  }, [profile?.tenant_id, supabase, router]);
 
   // Cart operations
   const updateQty = (sku: string, delta: number) => {

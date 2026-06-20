@@ -41,8 +41,8 @@ export default function Sidebar({ user, children }: SidebarProps) {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // If the user is already on checkout, delegate the scanning logic directly to CheckoutSubSection
-      if (pathname === '/dashboard/checkout') {
+      // If the user is already on Transaksi Penjualan, delegate the scanning logic directly to PenjualanClient
+      if (pathname === '/dashboard/penjualan') {
         return;
       }
 
@@ -83,8 +83,8 @@ export default function Sidebar({ user, children }: SidebarProps) {
               (activeEl as HTMLInputElement).blur();
             }
 
-            // Redirect automatically to the checkout view with query parameter
-            router.push(`/dashboard/checkout?scan=${encodeURIComponent(sku)}`);
+            // Redirect automatically to the Transaksi Penjualan view with query parameter
+            router.push(`/dashboard/penjualan?scan=${encodeURIComponent(sku)}`);
           }
         }
         keyBufferRef.current = [];
@@ -111,9 +111,8 @@ export default function Sidebar({ user, children }: SidebarProps) {
   const menuItems = [
     { name: 'Ringkasan', href: '/dashboard', icon: LayoutDashboard },
     { name: 'Daftar Produk', href: '/dashboard/produk', icon: Package },
-    { name: 'Checkout Kasir', href: '/dashboard/checkout', icon: ShoppingCart },
     { name: 'Pemindai Mobile', href: '/dashboard/scan', icon: Camera },
-    { name: 'Transaksi Penjualan', href: '/dashboard/penjualan', icon: TrendingUp },
+    { name: 'Transaksi Penjualan', href: '/dashboard/penjualan', icon: ShoppingCart },
     { name: 'Riwayat Stok', href: '/dashboard/stok', icon: History },
     { name: 'Laporan Keuangan', href: '/dashboard/laporan', icon: BarChart3 },
     { name: 'Pengguna', href: '/dashboard/users', icon: Users },

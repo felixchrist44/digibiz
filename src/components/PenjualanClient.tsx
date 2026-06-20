@@ -58,6 +58,9 @@ export default function PenjualanClient({
   const searchParams = useSearchParams();
   const pathname = usePathname();
 
+  const supabase = React.useMemo(() => createClient(), []);
+  const [processedScan, setProcessedScan] = useState<string | null>(null);
+
   const [activeTab, setActiveTab] = useState<'pos' | 'history'>('pos');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [search, setSearch] = useState('');
@@ -140,7 +143,6 @@ export default function PenjualanClient({
     // 2. Fallback to direct DB query if not in initialProducts list (since initialProducts is paginated/limited)
     if (!matchedProduct) {
       try {
-        const supabase = createClient();
         const { data, error } = await supabase
           .from('produk')
           .select('id, nama, kode_produk, harga, stok_saat_ini')
@@ -172,7 +174,6 @@ export default function PenjualanClient({
   useEffect(() => {
     if (!profile?.tenant_id) return;
 
-    const supabase = createClient();
     let channel: ReturnType<typeof supabase.channel> | null = null;
     let cancelled = false;
 
@@ -211,7 +212,22 @@ export default function PenjualanClient({
         channel.unsubscribe();
       }
     };
-  }, [profile?.tenant_id]);
+  }, [profile?.tenant_id, supabase]);
+
+  // Handle URL automatic scan query parameter
+  useEffect(() => {
+    const scanSku = searchParams.get('scan');
+    if (scanSku && scanSku !== processedScan) {
+      setProcessedScan(scanSku);
+      handleIncomingBarcodeRef.current(scanSku);
+      
+      // Clear scan query parameter from URL
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete('scan');
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname);
+    }
+  }, [searchParams, pathname, router, processedScan]);
 
   // Adjust quantity
   const updateQty = (id: string, delta: number) => {
