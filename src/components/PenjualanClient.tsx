@@ -303,7 +303,6 @@ export default function PenjualanClient({
     setLoadingDetails(true);
     setInvoiceDetails([]);
 
-    const supabase = createClient();
     const { data, error } = await supabase
       .from('detail_penjualan')
       .select('*, produk(nama)')
