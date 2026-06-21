@@ -50,16 +50,15 @@ interface DrillDownInvoice {
   detail_penjualan: {
     id: string;
     harga_satuan: number;
+    harga_modal_satuan: number | null;
     jumlah: number;
     subtotal: number;
     produk: {
       nama: string;
       kode_produk: string;
-      harga_modal: number;
     }[] | {
       nama: string;
       kode_produk: string;
-      harga_modal: number;
     } | null;
   }[] | null;
 }
@@ -255,8 +254,9 @@ export default function LaporanClient({
             id,
             jumlah,
             harga_satuan,
+            harga_modal_satuan,
             subtotal,
-            produk(nama, kode_produk, harga_modal)
+            produk(nama, kode_produk)
           )
         `)
         .gte('created_at', `${dateStr}T00:00:00.000Z`)
@@ -320,7 +320,7 @@ export default function LaporanClient({
       </div>
 
       {/* KPI Cards Grid */}
-      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 transition-opacity duration-200 ${isPending ? 'opacity-50 pointer-events-none' : ''}`}>
+      <div className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5 transition-opacity duration-200 ${isPending ? 'opacity-50 pointer-events-none' : ''}`}>
         
         {/* Omset / Gross Revenue */}
         <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-6 hover:border-slate-700/60 transition-all flex items-center justify-between">
@@ -330,6 +330,17 @@ export default function LaporanClient({
           </div>
           <div className="h-11 w-11 rounded-xl bg-indigo-500/10 border border-indigo-500/25 flex items-center justify-center text-indigo-400">
             <DollarSign className="h-5 w-5" />
+          </div>
+        </div>
+
+        {/* COGS / Harga Pokok Penjualan */}
+        <div className="bg-slate-900/40 border border-slate-800/80 rounded-2xl p-6 hover:border-slate-700/60 transition-all flex items-center justify-between">
+          <div className="space-y-1.5">
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">HPP (COGS)</span>
+            <p className="text-xl font-black text-amber-400">{formatIDR(stats.omset - stats.labaBersih)}</p>
+          </div>
+          <div className="h-11 w-11 rounded-xl bg-amber-500/10 border border-amber-500/25 flex items-center justify-center text-amber-400">
+            <Archive className="h-5 w-5" />
           </div>
         </div>
 
@@ -571,19 +582,29 @@ export default function LaporanClient({
                           <div className="space-y-2">
                             {inv.detail_penjualan?.map((item) => {
                               const sellPrice = Number(item.harga_satuan || 0);
-                              const productObj = Array.isArray(item.produk) ? item.produk[0] : item.produk;
-                              const modalCost = Number(productObj?.harga_modal || 0);
+                              const modalCost = Number(item.harga_modal_satuan || 0);
                               const profitRow = (sellPrice - modalCost) * item.jumlah;
+                              const isNegativeMargin = profitRow < 0;
+                              const productObj = Array.isArray(item.produk) ? item.produk[0] : item.produk;
 
                               return (
                                 <div
                                   key={item.id}
-                                  className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-xl bg-slate-900/40 border border-slate-850/50 text-xs gap-2"
+                                  className={`flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-xl border text-xs gap-2 ${
+                                    isNegativeMargin
+                                      ? 'bg-red-950/20 border-red-900/40'
+                                      : 'bg-slate-900/40 border-slate-850/50'
+                                  }`}
                                 >
                                   <div className="min-w-0">
-                                    <p className="font-bold text-white truncate">{productObj?.nama || 'Produk Dihapus'}</p>
+                                    <p className="font-bold text-white truncate">
+                                      {productObj?.nama || 'Produk Dihapus'}
+                                      {isNegativeMargin && (
+                                        <span className="ml-2 px-1.5 py-0.5 bg-red-500/20 border border-red-500/30 text-red-400 text-[9px] font-black rounded uppercase">Rugi</span>
+                                      )}
+                                    </p>
                                     <p className="text-[10px] text-slate-500 font-mono mt-0.5">
-                                      SKU: {productObj?.kode_produk || 'N/A'}
+                                      SKU: {productObj?.kode_produk || 'N/A'} · HPP: {formatIDR(modalCost)}
                                     </p>
                                   </div>
                                   <div className="flex items-center gap-6 text-right self-end sm:self-auto shrink-0">
@@ -593,8 +614,10 @@ export default function LaporanClient({
                                     <div className="font-bold text-slate-200 min-w-[90px]">
                                       {formatIDR(Number(item.subtotal))}
                                     </div>
-                                    <div className="font-bold text-emerald-400 min-w-[90px] border-l border-slate-850 pl-4 text-right">
-                                      + {formatIDR(profitRow)}
+                                    <div className={`font-bold min-w-[90px] border-l border-slate-850 pl-4 text-right ${
+                                      isNegativeMargin ? 'text-red-400' : 'text-emerald-400'
+                                    }`}>
+                                      {isNegativeMargin ? '− ' : '+ '}{formatIDR(Math.abs(profitRow))}
                                     </div>
                                   </div>
                                 </div>
@@ -607,10 +630,14 @@ export default function LaporanClient({
                         <div className="pt-3 border-t border-slate-850/50 flex items-center justify-between text-xs">
                           <div className="flex items-center gap-2">
                             <span className="text-slate-450 font-semibold">Laba Invoice:</span>
-                            <span className="font-black text-emerald-400">
+                            <span className={`font-black ${
+                              (inv.detail_penjualan?.reduce((sum: number, it) => {
+                                const cost = Number(it.harga_modal_satuan || 0);
+                                return sum + (Number(it.harga_satuan) - cost) * it.jumlah;
+                              }, 0) || 0) < 0 ? 'text-red-400' : 'text-emerald-400'
+                            }`}>
                                 {formatIDR(inv.detail_penjualan?.reduce((sum: number, it) => {
-                                  const productObj = Array.isArray(it.produk) ? it.produk[0] : it.produk;
-                                  const cost = Number(productObj?.harga_modal || 0);
+                                  const cost = Number(it.harga_modal_satuan || 0);
                                   return sum + (Number(it.harga_satuan) - cost) * it.jumlah;
                                 }, 0) || 0)}
                             </span>

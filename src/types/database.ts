@@ -62,6 +62,7 @@ export interface DetailPenjualan {
   produk_id: string | null;
   jumlah: number;
   harga_satuan: number;
+  harga_modal_satuan?: number | null;
   subtotal: number;
   created_at: string;
   produk?: {
