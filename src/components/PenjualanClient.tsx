@@ -19,6 +19,7 @@ import {
   Wifi
 } from 'lucide-react';
 import { Produk, Penjualan, DetailPenjualan, Profile } from '@/types/database';
+import { useCart, CartItem } from '@/components/CartProvider';
 
 interface Props {
   products: Produk[];
@@ -28,13 +29,6 @@ interface Props {
   profile: Profile | null;
 }
 
-interface CartItem {
-  id: string;
-  nama: string;
-  harga: number;
-  jumlah: number;
-  maxStok: number;
-}
 interface SuccessInvoice {
   nomor_invoice: string;
   items: {
@@ -62,25 +56,21 @@ export default function PenjualanClient({
   const [processedScan, setProcessedScan] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<'pos' | 'history'>('pos');
-  const [cart, setCart] = useState<CartItem[]>(() => {
-    if (typeof window === 'undefined') return [];
-    try {
-      const saved = sessionStorage.getItem('pos-cart');
-      const parsed = saved ? JSON.parse(saved) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  });
+  const {
+    cart,
+    socketStatus,
+    addToCart,
+    updateQty,
+    removeFromCart,
+    clearCart,
+    handleIncomingBarcode
+  } = useCart();
+
   const [search, setSearch] = useState('');
   const [searchResults, setSearchResults] = useState<Produk[] | null>(null);
   const [cashReceived, setCashReceived] = useState<string>('');
   const [invoices, setInvoices] = useState<Penjualan[]>(initialInvoices);
   const [isPending, startTransition] = useTransition();
-
-  const [socketStatus, setSocketStatus] = useState<'connecting' | 'connected' | 'disconnected'>(
-    profile?.tenant_id ? 'connecting' : 'disconnected'
-  );
 
   // Sync state values when props change directly in render (avoids cascading render effects)
   const [prevInitialInvoices, setPrevInitialInvoices] = useState(initialInvoices);
@@ -120,175 +110,26 @@ export default function PenjualanClient({
   // Search logic is handled dynamically via autocomplete fetch
   const filteredProducts = search.trim() ? (searchResults ?? initialProducts) : initialProducts;
 
-  // Add to cart
-  const addToCart = (product: Produk) => {
-    console.log('[1] addToCart called with:', product?.nama, product?.id);
-    if (product.stok_saat_ini === 0) {
-      console.log('[1a] BLOCKED: stok is 0 or undefined →', product.stok_saat_ini);
-      return;
-    }
-
-    setCart(prev => {
-      const existing = prev.find(item => item.id === product.id);
-      if (existing) {
-        if (existing.jumlah >= product.stok_saat_ini) {
-          alert(`Stok tidak mencukupi. Batas stok "${product.nama}" adalah ${product.stok_saat_ini} Pcs.`);
-          return prev;
-        }
-        const next = prev.map(item =>
-          item.id === product.id ? { ...item, jumlah: item.jumlah + 1 } : item
-        );
-        console.log('[2] setCart committing, new length:', next.length);
-        return next;
-      }
-      const next = [...prev, { id: product.id, nama: product.nama, harga: Number(product.harga), jumlah: 1, maxStok: product.stok_saat_ini }];
-      console.log('[2] setCart committing, new length:', next.length);
-      return next;
-    });
-  };
-
-  // Handle incoming barcode scan via Supabase Realtime channel
-  const handleIncomingBarcode = async (sku: string) => {
-    if (!sku) return;
-    const trimmedSku = sku.trim();
-    
-    // 1. Search in current products list
-    let matchedProduct = initialProducts.find(
-      p => p.kode_produk?.toLowerCase() === trimmedSku.toLowerCase()
-    );
-
-    // 2. Fallback to direct DB query if not in initialProducts list (since initialProducts is paginated/limited)
-    if (!matchedProduct) {
-      try {
-        const { data, error } = await supabase
-          .from('produk')
-          .select('id, nama, kode_produk, harga, stok_saat_ini')
-          .eq('kode_produk', trimmedSku)
-          .maybeSingle();
-
-        if (error) {
-          console.error('Error querying product by SKU:', error);
-        } else if (data) {
-          matchedProduct = data as Produk;
-        }
-      } catch (err) {
-        console.error('Error during fallback product lookup:', err);
-      }
-    }
-
-    console.log('[3] barcode lookup:', trimmedSku, '→ matched:', matchedProduct?.nama ?? 'NONE');
-    if (matchedProduct) {
-      addToCart(matchedProduct);
-    } else {
-      console.warn(`Produk dengan SKU/Kode "${trimmedSku}" tidak ditemukan.`);
-    }
-  };
-
-  const handleIncomingBarcodeRef = React.useRef(handleIncomingBarcode);
-  useEffect(() => {
-    handleIncomingBarcodeRef.current = handleIncomingBarcode;
-  });
-
-  useEffect(() => {
-    if (!profile?.tenant_id) return;
-
-    let channel: ReturnType<typeof supabase.channel> | null = null;
-    let cancelled = false;
-
-    (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (cancelled) return;
-
-      if (session?.access_token) {
-        supabase.realtime.setAuth(session.access_token);
-      }
-
-      channel = supabase.channel(`inventory-checkout-${profile.tenant_id}`, {
-        config: { broadcast: { self: false }, private: false }
-      });
-
-      channel
-        .on('broadcast', { event: 'barcode-scanned' }, (payload) => {
-          const sku = payload.payload?.sku;
-          if (sku) {
-            handleIncomingBarcodeRef.current(sku);
-          }
-        })
-        .subscribe((status) => {
-          if (status === 'SUBSCRIBED') {
-            setSocketStatus('connected');
-          } else if (status === 'TIMED_OUT' || status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-            setSocketStatus('disconnected');
-            console.error(`Realtime subscription status: ${status}`);
-          }
-        });
-    })();
-
-    return () => {
-      cancelled = true;
-      if (channel) {
-        channel.unsubscribe();
-      }
-    };
-  }, [profile?.tenant_id, supabase]);
-
   // Handle URL automatic scan query parameter
   useEffect(() => {
     const scanSku = searchParams.get('scan');
     if (scanSku && scanSku !== processedScan) {
       setProcessedScan(scanSku);
-      handleIncomingBarcodeRef.current(scanSku);
+      handleIncomingBarcode(scanSku);
       
-      // Clear scan query parameter from URL
-      const params = new URLSearchParams(searchParams.toString());
-      params.delete('scan');
-      const query = params.toString();
-      router.replace(query ? `${pathname}?${query}` : pathname);
+      // Clear scan query parameter from URL using browser history API
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('scan');
+        window.history.replaceState(null, '', url.pathname + url.search);
+      }
     }
-  }, [searchParams, pathname, router, processedScan]);
+  }, [searchParams, processedScan, handleIncomingBarcode]);
 
-  // Persist cart on every change. The lazy initializer guarantees `cart`
-  // is hydrated from sessionStorage on first render, so there is no empty
-  // pre-hydration window to guard against. This ensures barcode-scanned
-  // items (which can arrive during mount) are always written.
-  useEffect(() => {
-    console.log('[4] PERSIST writing cart, length:', cart.length, JSON.stringify(cart.map(c => c.id)));
-    try {
-      sessionStorage.setItem('pos-cart', JSON.stringify(cart));
-    } catch {}
-  }, [cart]);
-
-  // Adjust quantity
-  const updateQty = (id: string, delta: number) => {
-    setCart(prev =>
-      prev
-        .map(item => {
-          if (item.id === id) {
-            const nextQty = item.jumlah + delta;
-            if (nextQty > item.maxStok) {
-              alert(`Stok tidak mencukupi. Batas stok adalah ${item.maxStok} Pcs.`);
-              return item;
-            }
-            return { ...item, jumlah: nextQty };
-          }
-          return item;
-        })
-        .filter(item => item.jumlah > 0)
-    );
-  };
-
-  // Remove from cart
-  const removeFromCart = (id: string) => {
-    setCart(prev => prev.filter(item => item.id !== id));
-  };
-
-  // Clear entire cart and storage
-  const clearCart = () => {
-    setCart([]);
+  // Clear entire cart and reset input
+  const handleClearCart = () => {
+    clearCart();
     setCashReceived('');
-    try {
-      sessionStorage.removeItem('pos-cart');
-    } catch {}
   };
 
   // Calculations
@@ -326,11 +167,8 @@ export default function PenjualanClient({
         });
 
         // Clear cart
-        setCart([]);
+        clearCart();
         setCashReceived('');
-        try {
-          sessionStorage.removeItem('pos-cart');
-        } catch {}
 
         // Refresh dynamic server routes
         router.refresh();
@@ -594,7 +432,7 @@ export default function PenjualanClient({
 
                 {/* Clear all button */}
                 <button
-                  onClick={clearCart}
+                  onClick={handleClearCart}
                   disabled={isPending || cart.length === 0}
                   className="w-full flex items-center justify-center gap-2 py-2.5 border border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-30 disabled:cursor-not-allowed rounded-xl text-xs font-bold transition-all"
                 >

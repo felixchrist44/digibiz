@@ -2,6 +2,7 @@ import React from 'react';
 import { redirect } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import { getAuthenticatedUser } from '@/utils/supabase/auth';
+import { CartProvider } from '@/components/CartProvider';
 
 export default async function DashboardLayout({
   children,
@@ -23,7 +24,9 @@ export default async function DashboardLayout({
 
   return (
     <Sidebar user={userData}>
-      {children}
+      <CartProvider tenantId={profile?.tenant_id}>
+        {children}
+      </CartProvider>
     </Sidebar>
   );
 }
