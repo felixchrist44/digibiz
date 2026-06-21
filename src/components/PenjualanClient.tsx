@@ -62,15 +62,8 @@ export default function PenjualanClient({
   const [processedScan, setProcessedScan] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<'pos' | 'history'>('pos');
-  const [cart, setCart] = useState<CartItem[]>(() => {
-    if (typeof window === 'undefined') return [];
-    try {
-      const saved = sessionStorage.getItem('pos-cart');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [cartLoaded, setCartLoaded] = useState(false);
   const [search, setSearch] = useState('');
   const [searchResults, setSearchResults] = useState<Produk[] | null>(null);
   const [cashReceived, setCashReceived] = useState<string>('');
@@ -237,12 +230,24 @@ export default function PenjualanClient({
     }
   }, [searchParams, pathname, router, processedScan]);
 
+  // Load cart from sessionStorage on mount
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem('pos-cart');
+      if (saved) {
+        setCart(JSON.parse(saved));
+      }
+    } catch {}
+    setCartLoaded(true);
+  }, []);
+
   // Persist cart to sessionStorage on changes
   useEffect(() => {
+    if (!cartLoaded) return;
     try {
       sessionStorage.setItem('pos-cart', JSON.stringify(cart));
     } catch {}
-  }, [cart]);
+  }, [cart, cartLoaded]);
 
   // Adjust quantity
   const updateQty = (id: string, delta: number) => {
