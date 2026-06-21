@@ -62,8 +62,16 @@ export default function PenjualanClient({
   const [processedScan, setProcessedScan] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<'pos' | 'history'>('pos');
-  const [cart, setCart] = useState<CartItem[]>([]);
-  const [cartLoaded, setCartLoaded] = useState(false);
+  const [cart, setCart] = useState<CartItem[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const saved = sessionStorage.getItem('pos-cart');
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
   const [search, setSearch] = useState('');
   const [searchResults, setSearchResults] = useState<Produk[] | null>(null);
   const [cashReceived, setCashReceived] = useState<string>('');
@@ -230,24 +238,15 @@ export default function PenjualanClient({
     }
   }, [searchParams, pathname, router, processedScan]);
 
-  // Load cart from sessionStorage on mount
+  // Persist cart on every change. The lazy initializer guarantees `cart`
+  // is hydrated from sessionStorage on first render, so there is no empty
+  // pre-hydration window to guard against. This ensures barcode-scanned
+  // items (which can arrive during mount) are always written.
   useEffect(() => {
-    try {
-      const saved = sessionStorage.getItem('pos-cart');
-      if (saved) {
-        setCart(JSON.parse(saved));
-      }
-    } catch {}
-    setCartLoaded(true);
-  }, []);
-
-  // Persist cart to sessionStorage on changes
-  useEffect(() => {
-    if (!cartLoaded) return;
     try {
       sessionStorage.setItem('pos-cart', JSON.stringify(cart));
     } catch {}
-  }, [cart, cartLoaded]);
+  }, [cart]);
 
   // Adjust quantity
   const updateQty = (id: string, delta: number) => {
