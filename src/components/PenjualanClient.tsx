@@ -62,7 +62,15 @@ export default function PenjualanClient({
   const [processedScan, setProcessedScan] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<'pos' | 'history'>('pos');
-  const [cart, setCart] = useState<CartItem[]>([]);
+  const [cart, setCart] = useState<CartItem[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const saved = sessionStorage.getItem('pos-cart');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [search, setSearch] = useState('');
   const [searchResults, setSearchResults] = useState<Produk[] | null>(null);
   const [cashReceived, setCashReceived] = useState<string>('');
@@ -229,6 +237,13 @@ export default function PenjualanClient({
     }
   }, [searchParams, pathname, router, processedScan]);
 
+  // Persist cart to sessionStorage on changes
+  useEffect(() => {
+    try {
+      sessionStorage.setItem('pos-cart', JSON.stringify(cart));
+    } catch {}
+  }, [cart]);
+
   // Adjust quantity
   const updateQty = (id: string, delta: number) => {
     setCart(prev =>
@@ -251,6 +266,15 @@ export default function PenjualanClient({
   // Remove from cart
   const removeFromCart = (id: string) => {
     setCart(prev => prev.filter(item => item.id !== id));
+  };
+
+  // Clear entire cart and storage
+  const clearCart = () => {
+    setCart([]);
+    setCashReceived('');
+    try {
+      sessionStorage.removeItem('pos-cart');
+    } catch {}
   };
 
   // Calculations
@@ -290,6 +314,9 @@ export default function PenjualanClient({
         // Clear cart
         setCart([]);
         setCashReceived('');
+        try {
+          sessionStorage.removeItem('pos-cart');
+        } catch {}
 
         // Refresh dynamic server routes
         router.refresh();
@@ -549,6 +576,16 @@ export default function PenjualanClient({
                 >
                   Bayar & Selesaikan Transaksi
                   <ArrowRight className="h-4 w-4" />
+                </button>
+
+                {/* Clear all button */}
+                <button
+                  onClick={clearCart}
+                  disabled={isPending || cart.length === 0}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 border border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-30 disabled:cursor-not-allowed rounded-xl text-xs font-bold transition-all"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Hapus Semua
                 </button>
               </div>
             )}

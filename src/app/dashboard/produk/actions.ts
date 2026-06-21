@@ -19,8 +19,8 @@ export async function createProduk(formData: FormData) {
   const harga = Number(formData.get('harga') || 0);
   const harga_modal = Number(formData.get('harga_modal') || 0);
 
-  if (!kode_produk || !nama) {
-    return { error: 'Kode produk dan nama produk wajib diisi.' };
+  if (!nama) {
+    return { error: 'Nama produk wajib diisi.' };
   }
 
   // Handle Image Upload
@@ -57,30 +57,80 @@ export async function createProduk(formData: FormData) {
     }
   }
 
-  // Insert product
-  const { data: newProduct, error } = await supabase
-    .from('produk')
-    .insert({
-      kode_produk,
-      nama,
-      deskripsi: deskripsi || null,
-      harga,
-      harga_modal,
-      stok_saat_ini: stok_awal,
-      gambar_url
-    })
-    .select()
-    .single();
+  let finalKodeProduk = kode_produk?.trim() || '';
+  const isGenerated = finalKodeProduk === '';
+  let newProduct = null;
+  let insertError = null;
 
-  if (error) {
+  if (isGenerated) {
+    let retries = 5;
+    while (retries > 0) {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let barcodeStr = '';
+      for (let i = 0; i < 8; i++) {
+        barcodeStr += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      finalKodeProduk = `DB-${barcodeStr}`;
+
+      const { data, error } = await supabase
+        .from('produk')
+        .insert({
+          kode_produk: finalKodeProduk,
+          nama,
+          deskripsi: deskripsi || null,
+          harga,
+          harga_modal,
+          stok_saat_ini: stok_awal,
+          gambar_url,
+          is_generated: true
+        })
+        .select()
+        .single();
+
+      if (!error) {
+        newProduct = data;
+        insertError = null;
+        break;
+      }
+
+      insertError = error;
+      const isUniqueViolation = error.code === '23505' || 
+                                error.message?.toLowerCase().includes('unique') || 
+                                error.message?.toLowerCase().includes('duplicate');
+      if (!isUniqueViolation) {
+        break;
+      }
+      retries--;
+    }
+  } else {
+    const { data, error } = await supabase
+      .from('produk')
+      .insert({
+        kode_produk: finalKodeProduk,
+        nama,
+        deskripsi: deskripsi || null,
+        harga,
+        harga_modal,
+        stok_saat_ini: stok_awal,
+        gambar_url,
+        is_generated: false
+      })
+      .select()
+      .single();
+
+    newProduct = data;
+    insertError = error;
+  }
+
+  if (insertError) {
     // Cleanup orphaned image if database insert fails
     if (uploadedFilePath) {
       await supabase.storage.from('product-images').remove([uploadedFilePath]);
     }
-    if (error.message.includes('unique constraint')) {
+    if (insertError.message.includes('unique constraint') || insertError.code === '23505') {
       return { error: 'Kode produk sudah terdaftar.' };
     }
-    return { error: error.message };
+    return { error: insertError.message };
   }
 
   // If there's an initial stock, log it in stock logs!

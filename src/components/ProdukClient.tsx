@@ -832,16 +832,27 @@ export default function ProdukClient({
                     {/* Right Side: Printing, Editing & Deleting Actions */}
                     <div className="flex items-center justify-end gap-2 shrink-0 border-t border-slate-850/50 pt-3 md:pt-0 md:border-0">
                       {/* Barcode Print trigger */}
-                      <button
-                        onClick={() => {
-                          setSelectedBarcodeProduct(p);
-                          setIsBarcodeOpen(true);
-                        }}
-                        className="p-2 rounded-lg bg-slate-950/40 border border-slate-800 hover:border-indigo-500/30 text-slate-400 hover:text-indigo-400 transition-colors"
-                        title="Cetak Barcode Label"
-                      >
-                        <BarcodeIcon className="h-4 w-4" />
-                      </button>
+                      {(() => {
+                        const canPrint = p.is_generated || isOwner;
+                        return (
+                          <button
+                            onClick={() => {
+                              if (!canPrint) return;
+                              setSelectedBarcodeProduct(p);
+                              setIsBarcodeOpen(true);
+                            }}
+                            disabled={!canPrint}
+                            className={`p-2 rounded-lg border transition-all ${
+                              canPrint
+                                ? 'bg-slate-950/40 border-slate-800 hover:border-indigo-500/30 text-slate-400 hover:text-indigo-400'
+                                : 'bg-slate-950/10 border-slate-850 text-slate-600 cursor-not-allowed'
+                            }`}
+                            title={canPrint ? "Cetak Barcode Label" : "Hanya Owner yang dapat mencetak ulang barcode pabrik"}
+                          >
+                            <BarcodeIcon className="h-4 w-4" />
+                          </button>
+                        );
+                      })()}
 
                       {/* Edit */}
                       <button
@@ -959,10 +970,12 @@ export default function ProdukClient({
                   <input
                     type="text"
                     name="kode_produk"
-                    required
-                    placeholder="PRD-001"
+                    placeholder="Scan/ketik barcode (kosongkan untuk otomatis)"
                     className="w-full px-3 py-2.5 bg-slate-950/40 border border-slate-800 rounded-xl text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
                   />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Jika dikosongkan, sistem akan otomatis membuat barcode Code 128 baru.
+                  </p>
                 </div>
 
                 {/* Stock Initial */}
@@ -1200,7 +1213,7 @@ export default function ProdukClient({
       )}
 
       {/* ==================== BARCODE GENERATOR MODAL ==================== */}
-      {isBarcodeOpen && selectedBarcodeProduct && (
+      {isBarcodeOpen && selectedBarcodeProduct && (selectedBarcodeProduct.is_generated || isOwner) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 print:bg-transparent print:backdrop-blur-none">
           <div className="w-full max-w-sm bg-slate-900 border border-slate-850 rounded-3xl p-6 shadow-2xl relative animate-in zoom-in-95 duration-150 print:border-0 print:shadow-none print:p-0 print:bg-transparent">
             {/* Close Button */}

@@ -68,6 +68,15 @@ export async function updateSession(request: NextRequest) {
 
   // Set up custom request headers to avoid duplicate database/auth checks in Server Components
   const requestHeaders = new Headers(request.headers);
+  
+  // Security: Strip client-supplied headers to prevent authentication spoofing/bypass
+  requestHeaders.delete('x-user-id');
+  requestHeaders.delete('x-user-email');
+  requestHeaders.delete('x-user-tenant-id');
+  requestHeaders.delete('x-user-full-name');
+  requestHeaders.delete('x-user-role');
+  requestHeaders.delete('x-user-created-at');
+
   if (user) {
     requestHeaders.set('x-user-id', user.id);
     requestHeaders.set('x-user-email', user.email || '');

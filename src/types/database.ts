@@ -24,6 +24,7 @@ export interface Produk {
   harga_modal?: number | null;
   stok_saat_ini: number;
   gambar_url: string | null;
+  is_generated: boolean;
   created_at: string;
 }
 
