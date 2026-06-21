@@ -122,7 +122,11 @@ export default function PenjualanClient({
 
   // Add to cart
   const addToCart = (product: Produk) => {
-    if (product.stok_saat_ini === 0) return;
+    console.log('[1] addToCart called with:', product?.nama, product?.id);
+    if (product.stok_saat_ini === 0) {
+      console.log('[1a] BLOCKED: stok is 0 or undefined →', product.stok_saat_ini);
+      return;
+    }
 
     setCart(prev => {
       const existing = prev.find(item => item.id === product.id);
@@ -131,11 +135,15 @@ export default function PenjualanClient({
           alert(`Stok tidak mencukupi. Batas stok "${product.nama}" adalah ${product.stok_saat_ini} Pcs.`);
           return prev;
         }
-        return prev.map(item =>
+        const next = prev.map(item =>
           item.id === product.id ? { ...item, jumlah: item.jumlah + 1 } : item
         );
+        console.log('[2] setCart committing, new length:', next.length);
+        return next;
       }
-      return [...prev, { id: product.id, nama: product.nama, harga: Number(product.harga), jumlah: 1, maxStok: product.stok_saat_ini }];
+      const next = [...prev, { id: product.id, nama: product.nama, harga: Number(product.harga), jumlah: 1, maxStok: product.stok_saat_ini }];
+      console.log('[2] setCart committing, new length:', next.length);
+      return next;
     });
   };
 
@@ -168,6 +176,7 @@ export default function PenjualanClient({
       }
     }
 
+    console.log('[3] barcode lookup:', trimmedSku, '→ matched:', matchedProduct?.nama ?? 'NONE');
     if (matchedProduct) {
       addToCart(matchedProduct);
     } else {
@@ -243,6 +252,7 @@ export default function PenjualanClient({
   // pre-hydration window to guard against. This ensures barcode-scanned
   // items (which can arrive during mount) are always written.
   useEffect(() => {
+    console.log('[4] PERSIST writing cart, length:', cart.length, JSON.stringify(cart.map(c => c.id)));
     try {
       sessionStorage.setItem('pos-cart', JSON.stringify(cart));
     } catch {}
