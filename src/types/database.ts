@@ -1,4 +1,4 @@
-export type UserRole = 'owner' | 'staff';
+export type UserRole = 'owner' | 'manager' | 'staff';
 
 export interface Profile {
   id: string;
@@ -69,3 +69,16 @@ export interface DetailPenjualan {
     nama: string;
   };
 }
+
+export interface TenantSettings {
+  tenant_id: string;
+  store_name: string;
+  store_address: string | null;
+  receipt_header: string | null;
+  receipt_footer: string | null;
+  tax_enabled: boolean;
+  tax_rate: number;
+  created_at: string;
+  updated_at: string;
+}
+

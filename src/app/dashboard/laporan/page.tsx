@@ -2,6 +2,7 @@ import React from 'react';
 import { redirect } from 'next/navigation';
 import { getAuthenticatedUser } from '@/utils/supabase/auth';
 import LaporanClient from '@/components/LaporanClient';
+import { canViewFinancials } from '@/utils/permissions';
 
 interface PageProps {
   searchParams: Promise<{
@@ -15,7 +16,7 @@ export default async function LaporanPage({ searchParams }: PageProps) {
   const { profile, supabase } = await getAuthenticatedUser();
 
   // Owner-only page: redirect non-owners back to dashboard
-  if (!profile || profile.role !== 'owner') {
+  if (!profile || !canViewFinancials(profile.role)) {
     redirect('/dashboard');
   }
 

@@ -3,6 +3,8 @@
 import { getAuthenticatedUser } from '@/utils/supabase/auth';
 import { revalidatePath } from 'next/cache';
 import { randomUUID } from 'crypto';
+import { writeAuditLog } from '@/utils/supabase/audit';
+import { canChangePrice } from '@/utils/permissions';
 
 export async function createProduk(formData: FormData) {
   const { profile, supabase } = await getAuthenticatedUser();
@@ -154,6 +156,24 @@ export async function createProduk(formData: FormData) {
     }
   }
 
+  if (newProduct) {
+    await writeAuditLog(supabase, {
+      actor_id: profile.id,
+      actor_name: profile.full_name || 'Owner',
+      action: 'product_create',
+      target_type: 'produk',
+      target_id: newProduct.id,
+      target_name: nama,
+      detail: {
+        kode_produk: finalKodeProduk,
+        harga,
+        harga_modal,
+        stok_awal,
+      },
+      tenant_id: profile.tenant_id,
+    });
+  }
+
   revalidatePath('/dashboard/produk');
   revalidatePath('/dashboard');
   return { success: true };
@@ -194,8 +214,8 @@ export async function updateProduk(id: string, formData: FormData) {
   };
 
   if (Number(currentProduct.harga) !== inputHarga) {
-    if (profile.role !== 'owner') {
-      return { error: 'Hanya Owner yang dapat mengubah harga produk.' };
+    if (!canChangePrice(profile.role)) {
+      return { error: 'Hanya Owner atau Manager yang dapat mengubah harga produk.' };
     }
     updateData.harga = inputHarga;
   }
@@ -258,6 +278,33 @@ export async function updateProduk(id: string, formData: FormData) {
     return { error: updateError.message };
   }
 
+  // Log price and cost changes separately, only when changed
+  if (updateData.harga !== undefined) {
+    await writeAuditLog(supabase, {
+      actor_id: profile.id,
+      actor_name: profile.full_name || 'Owner',
+      action: 'price_change',
+      target_type: 'produk',
+      target_id: id,
+      target_name: nama,
+      detail: { harga: { old: Number(currentProduct.harga), new: inputHarga } },
+      tenant_id: profile.tenant_id,
+    });
+  }
+
+  if (updateData.harga_modal !== undefined) {
+    await writeAuditLog(supabase, {
+      actor_id: profile.id,
+      actor_name: profile.full_name || 'Owner',
+      action: 'cost_change',
+      target_type: 'produk',
+      target_id: id,
+      target_name: nama,
+      detail: { harga_modal: { old: Number(currentProduct.harga_modal || 0), new: inputHargaModal } },
+      tenant_id: profile.tenant_id,
+    });
+  }
+
   if (oldImageToDelete) {
     try {
       const oldPath = oldImageToDelete.split('/').pop();
@@ -282,7 +329,7 @@ export async function deleteProduk(id: string) {
 
   const { data: product, error: fetchError } = await supabase
     .from('produk')
-    .select('gambar_url')
+    .select('gambar_url, nama')
     .eq('id', id)
     .single();
 
@@ -298,6 +345,21 @@ export async function deleteProduk(id: string) {
   if (deleteError) {
     return { error: deleteError.message };
   }
+
+  // Write audit log entry
+  await writeAuditLog(supabase, {
+    actor_id: profile.id,
+    actor_name: profile.full_name || 'Owner',
+    action: 'product_delete',
+    target_type: 'produk',
+    target_id: id,
+    target_name: product.nama,
+    detail: {
+      nama: product.nama,
+      deleted_at: new Date().toISOString(),
+    },
+    tenant_id: profile.tenant_id,
+  });
 
   if (product.gambar_url) {
     try {

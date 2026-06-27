@@ -3,6 +3,7 @@
 import React, { useState, useTransition, useEffect, useRef } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { createProduk, updateProduk, deleteProduk } from '@/app/dashboard/produk/actions';
+import { adjustStok } from '@/app/dashboard/stok/actions';
 import {
   Search,
   Plus,
@@ -20,11 +21,14 @@ import {
   Minus,
   Loader2,
   Clock,
-  Check
+  Check,
+  ArrowUpCircle,
+  ArrowDownCircle
 } from 'lucide-react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { Produk, Profile } from '@/types/database';
 import BarcodeGenerator from '@/components/BarcodeGenerator';
+import { canManageInventory, canChangePrice } from '@/utils/permissions';
 
 interface CartItem {
   id: string;
@@ -118,10 +122,18 @@ export default function ProdukClient({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  // Stock adjust modal state
+  const [isAdjustOpen, setIsAdjustOpen] = useState(false);
+  const [selectedAdjustProduct, setSelectedAdjustProduct] = useState<Produk | null>(null);
+  const [adjustErrorMessage, setAdjustErrorMessage] = useState<string | null>(null);
+  const [adjustSuccessMessage, setAdjustSuccessMessage] = useState<string | null>(null);
+
   // Live Image Preview state for forms
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
 
   const isOwner = profile.role === 'owner';
+  const canManageStock = canManageInventory(profile.role);
+  const canEditPrice = canChangePrice(profile.role);
 
   // POS State Variables
   const [posModeActive, setPosModeActive] = useState(false);
@@ -399,6 +411,32 @@ export default function ProdukClient({
     });
   };
 
+  // Handle Stock Adjust
+  const handleAdjustSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!selectedAdjustProduct) return;
+    setAdjustErrorMessage(null);
+    setAdjustSuccessMessage(null);
+
+    const formData = new FormData(e.currentTarget);
+    formData.set('produk_id', selectedAdjustProduct.id);
+
+    startTransition(async () => {
+      const res = await adjustStok(formData);
+      if (res?.error) {
+        setAdjustErrorMessage(res.error);
+      } else {
+        setAdjustSuccessMessage('Mutasi stok berhasil dicatat.');
+        router.refresh();
+        setTimeout(() => {
+          setIsAdjustOpen(false);
+          setAdjustSuccessMessage(null);
+          setSelectedAdjustProduct(null);
+        }, 1200);
+      }
+    });
+  };
+
   // Handle Delete Product
   const handleDelete = async (id: string) => {
     if (!confirm('Apakah Anda yakin ingin menghapus produk ini? Semua riwayat stok dan transaksi item ini akan hilang.')) return;
@@ -475,11 +513,11 @@ export default function ProdukClient({
       </div>
 
       {/* Role Restriction Banner for Staff */}
-      {!posModeActive && !isOwner && (
+      {!posModeActive && profile.role === 'staff' && (
         <div className="flex items-center gap-3 p-4 bg-amber-500/10 border border-amber-555/20 rounded-2xl text-amber-400 text-xs shadow-inner">
           <Lock className="h-4 w-4 shrink-0 animate-pulse" />
           <span>
-            <strong>Akses Staff Terbatas:</strong> Hanya <strong>Owner</strong> yang berhak mendaftarkan produk baru, menentukan/mengubah harga, dan menghapus produk dari database.
+            <strong>Akses Staff Terbatas:</strong> Hanya <strong>Owner</strong> atau <strong>Manager</strong> yang berhak mengubah harga jual dan melakukan penyesuaian stok.
           </span>
         </div>
       )}
@@ -833,7 +871,7 @@ export default function ProdukClient({
                     <div className="flex items-center justify-end gap-2 shrink-0 border-t border-slate-850/50 pt-3 md:pt-0 md:border-0">
                       {/* Barcode Print trigger */}
                       {(() => {
-                        const canPrint = p.is_generated || isOwner;
+                        const canPrint = p.is_generated || canManageStock;
                         return (
                           <button
                             onClick={() => {
@@ -844,15 +882,30 @@ export default function ProdukClient({
                             disabled={!canPrint}
                             className={`p-2 rounded-lg border transition-all ${
                               canPrint
-                                ? 'bg-slate-950/40 border-slate-800 hover:border-indigo-500/30 text-slate-400 hover:text-indigo-400'
+                                ? 'bg-slate-955/40 border-slate-800 hover:border-indigo-500/30 text-slate-400 hover:text-indigo-400'
                                 : 'bg-slate-950/10 border-slate-850 text-slate-600 cursor-not-allowed'
                             }`}
-                            title={canPrint ? "Cetak Barcode Label" : "Hanya Owner yang dapat mencetak ulang barcode pabrik"}
+                            title={canPrint ? "Cetak Barcode Label" : "Hanya Owner atau Manager yang dapat mencetak ulang barcode pabrik"}
                           >
                             <BarcodeIcon className="h-4 w-4" />
                           </button>
                         );
                       })()}
+
+                      {canManageStock && (
+                        <button
+                          onClick={() => {
+                            setSelectedAdjustProduct(p);
+                            setAdjustErrorMessage(null);
+                            setAdjustSuccessMessage(null);
+                            setIsAdjustOpen(true);
+                          }}
+                          className="p-2 rounded-lg bg-slate-950/40 border border-slate-800 hover:border-indigo-500/30 text-slate-400 hover:text-indigo-400 transition-colors"
+                          title="Catat Mutasi Stok"
+                        >
+                          <ArrowUpCircle className="h-4 w-4 text-emerald-450" />
+                        </button>
+                      )}
 
                       {/* Edit */}
                       <button
@@ -1152,9 +1205,9 @@ export default function ProdukClient({
                 <div className={isOwner ? '' : 'sm:col-span-2'}>
                   <div className="flex items-center justify-between mb-2">
                     <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Harga Jual (IDR)</label>
-                    {!isOwner && (
+                    {!canEditPrice && (
                       <span className="text-[10px] text-amber-400 flex items-center gap-1 font-medium bg-amber-500/5 px-2 py-0.5 rounded border border-amber-500/10">
-                        <Lock className="h-3 w-3" /> Hanya Owner
+                        <Lock className="h-3 w-3" /> Hanya Owner / Manager
                       </span>
                     )}
                   </div>
@@ -1165,15 +1218,15 @@ export default function ProdukClient({
                       name="harga"
                       min="0"
                       defaultValue={Number(currentProduct.harga)}
-                      disabled={!isOwner}
-                      className={`w-full pl-9 pr-3 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${isOwner
+                      disabled={!canEditPrice}
+                      className={`w-full pl-9 pr-3 py-2.5 border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${canEditPrice
                         ? 'bg-slate-950/40 border-slate-800 text-slate-200'
-                        : 'bg-slate-950/20 border-slate-850 text-slate-500 cursor-not-allowed'
+                        : 'bg-slate-950/20 border-slate-855 text-slate-500 cursor-not-allowed'
                         }`}
                     />
                   </div>
-                  {!isOwner && (
-                    <p className="text-[10px] text-slate-500 mt-1">Akses Terbatas: Sebagai Staff, Anda tidak dapat mengubah harga barang. Hubungi Owner.</p>
+                  {!canEditPrice && (
+                    <p className="text-[10px] text-slate-500 mt-1">Akses Terbatas: Sebagai Staff, Anda tidak dapat mengubah harga barang. Hubungi Owner atau Manager.</p>
                   )}
                 </div>
               </div>
@@ -1215,7 +1268,7 @@ export default function ProdukClient({
       {/* ==================== BARCODE GENERATOR MODAL ==================== */}
       {isBarcodeOpen && selectedBarcodeProduct && (selectedBarcodeProduct.is_generated || isOwner) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 print:bg-transparent print:backdrop-blur-none">
-          <div className="w-full max-w-sm bg-slate-900 border border-slate-850 rounded-3xl p-6 shadow-2xl relative animate-in zoom-in-95 duration-150 print:border-0 print:shadow-none print:p-0 print:bg-transparent">
+          <div className="w-full max-w-sm bg-slate-900 border border-slate-855 rounded-3xl p-6 shadow-2xl relative animate-in zoom-in-95 duration-150 print:border-0 print:shadow-none print:p-0 print:bg-transparent">
             {/* Close Button */}
             <button
               onClick={() => setIsBarcodeOpen(false)}
@@ -1229,6 +1282,110 @@ export default function ProdukClient({
               name={selectedBarcodeProduct.nama}
               price={Number(selectedBarcodeProduct.harga)}
             />
+          </div>
+        </div>
+      )}
+
+      {/* ==================== ADJUST STOCK MODAL ==================== */}
+      {isAdjustOpen && selectedAdjustProduct && canManageStock && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 shadow-2xl relative animate-in zoom-in-95 duration-150">
+            <button
+              onClick={() => setIsAdjustOpen(false)}
+              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-white rounded-lg"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <h2 className="text-xl font-bold text-white mb-2">Catat Mutasi Stok</h2>
+            <p className="text-xs text-slate-400 mb-6">
+              Sesuaikan stok untuk <span className="font-bold text-indigo-400">{selectedAdjustProduct.nama}</span> secara manual.
+            </p>
+
+            <form onSubmit={handleAdjustSubmit} className="space-y-5">
+              {adjustErrorMessage && <div className="p-3 bg-red-950/40 border border-red-900/50 rounded-xl text-xs text-red-400">{adjustErrorMessage}</div>}
+              {adjustSuccessMessage && <div className="p-3 bg-emerald-950/40 border border-emerald-900/50 rounded-xl text-xs text-emerald-400 flex items-center gap-2"><CheckCircle className="h-4 w-4 shrink-0" />{adjustSuccessMessage}</div>}
+
+              {/* Hidden inputs / display */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Produk</label>
+                <div className="w-full px-3 py-2.5 bg-slate-955/45 border border-slate-800 rounded-xl text-slate-300 text-sm font-semibold">
+                  {selectedAdjustProduct.nama} (Stok Saat Ini: {selectedAdjustProduct.stok_saat_ini} Pcs)
+                </div>
+                <input type="hidden" name="produk_id" value={selectedAdjustProduct.id} />
+              </div>
+
+              {/* Adjust Direction */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Arah Mutasi</label>
+                <div className="grid grid-cols-2 gap-4">
+                  <label className="relative flex items-center justify-center p-3 rounded-xl border border-slate-800 bg-slate-950/20 hover:bg-slate-950/40 cursor-pointer text-slate-350 has-checked:border-indigo-500 has-checked:bg-indigo-600/10 has-checked:text-white transition-all">
+                    <input
+                      type="radio"
+                      name="tipe"
+                      value="masuk"
+                      defaultChecked
+                      className="peer sr-only"
+                    />
+                    <ArrowUpCircle className="h-4 w-4 mr-2 text-emerald-400" />
+                    <span className="text-sm font-semibold">Stok Masuk</span>
+                  </label>
+                  <label className="relative flex items-center justify-center p-3 rounded-xl border border-slate-800 bg-slate-950/20 hover:bg-slate-950/40 cursor-pointer text-slate-350 has-checked:border-indigo-500 has-checked:bg-indigo-600/10 has-checked:text-white transition-all">
+                    <input
+                      type="radio"
+                      name="tipe"
+                      value="keluar"
+                      className="peer sr-only"
+                    />
+                    <ArrowDownCircle className="h-4 w-4 mr-2 text-red-400" />
+                    <span className="text-sm font-semibold">Stok Keluar</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Quantity */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Jumlah Barang</label>
+                <input
+                  type="number"
+                  name="jumlah"
+                  min="1"
+                  defaultValue="1"
+                  required
+                  className="w-full px-3 py-2.5 bg-slate-950/40 border border-slate-800 rounded-xl text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                />
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Keterangan / Alasan</label>
+                <textarea
+                  name="keterangan"
+                  rows={2}
+                  required
+                  placeholder="Contoh: Kulakan baru, barang rusak, retur pelanggan..."
+                  className="w-full px-3 py-2.5 bg-slate-950/40 border border-slate-800 rounded-xl text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm resize-none"
+                />
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-850">
+                <button
+                  type="button"
+                  onClick={() => setIsAdjustOpen(false)}
+                  className="px-4 py-2.5 bg-slate-950/40 border border-slate-800 text-slate-400 hover:text-white rounded-xl text-sm font-semibold transition-colors"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isPending}
+                  className="px-5 py-2.5 bg-indigo-650 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition-all disabled:opacity-50"
+                >
+                  Simpan Mutasi
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

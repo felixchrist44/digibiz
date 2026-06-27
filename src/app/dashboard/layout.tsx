@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import { getAuthenticatedUser } from '@/utils/supabase/auth';
 import { CartProvider } from '@/components/CartProvider';
+import { UserRole } from '@/types/database';
 
 export default async function DashboardLayout({
   children,
@@ -19,7 +20,7 @@ export default async function DashboardLayout({
   const userData = {
     email: user.email,
     full_name: profile?.full_name || user.email?.split('@')[0] || 'Staff Member',
-    role: (profile?.role as 'owner' | 'staff') || 'staff',
+    role: (profile?.role as UserRole) || 'staff',
   };
 
   return (

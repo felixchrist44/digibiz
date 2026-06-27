@@ -4,6 +4,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { logout } from '@/app/auth/actions';
+import { UserRole } from '@/types/database';
+import { canViewAudit, canViewFinancials, canManageUsers, canManageSettings } from '@/utils/permissions';
 import {
   LayoutDashboard,
   Package,
@@ -19,14 +21,15 @@ import {
   Barcode,
   ShoppingCart,
   Camera,
-  BarChart3
+  BarChart3,
+  Settings
 } from 'lucide-react';
 
 interface SidebarProps {
   user: {
     email?: string;
     full_name: string | null;
-    role: 'owner' | 'staff';
+    role: UserRole;
   };
   children: React.ReactNode;
 }
@@ -113,9 +116,11 @@ export default function Sidebar({ user, children }: SidebarProps) {
     { name: 'Daftar Produk', href: '/dashboard/produk', icon: Package },
     { name: 'Pemindai Mobile', href: '/dashboard/scan', icon: Camera },
     { name: 'Transaksi Penjualan', href: '/dashboard/penjualan', icon: ShoppingCart },
-    { name: 'Riwayat Stok', href: '/dashboard/stok', icon: History },
+    { name: 'Riwayat Penjualan', href: '/dashboard/riwayat-penjualan', icon: History },
+    { name: 'Riwayat Aktivitas', href: '/dashboard/aktivitas', icon: History },
     { name: 'Laporan Keuangan', href: '/dashboard/laporan', icon: BarChart3 },
     { name: 'Pengguna', href: '/dashboard/users', icon: Users },
+    { name: 'Pengaturan Struk', href: '/dashboard/pengaturan', icon: Settings },
   ];
 
   return (
@@ -175,6 +180,11 @@ export default function Sidebar({ user, children }: SidebarProps) {
                   <ShieldCheck className="h-3 w-3 text-emerald-400" />
                   Owner
                 </>
+              ) : user.role === 'manager' ? (
+                <>
+                  <ShieldCheck className="h-3 w-3 text-blue-400" />
+                  Manager
+                </>
               ) : (
                 <>
                   <Shield className="h-3 w-3 text-indigo-400" />
@@ -188,8 +198,17 @@ export default function Sidebar({ user, children }: SidebarProps) {
         {/* Navigation Links */}
         <nav className="flex-1 px-4 space-y-1 overflow-y-auto">
           {menuItems.map((item) => {
-            // Hide financial report menu from staff
-            if (item.href === '/dashboard/laporan' && user.role !== 'owner') {
+            // Hide menu items dynamically based on permission matrices
+            if (item.href === '/dashboard/laporan' && !canViewFinancials(user.role)) {
+              return null;
+            }
+            if (item.href === '/dashboard/aktivitas' && !canViewAudit(user.role)) {
+              return null;
+            }
+            if (item.href === '/dashboard/users' && !canManageUsers(user.role)) {
+              return null;
+            }
+            if (item.href === '/dashboard/pengaturan' && !canManageSettings(user.role)) {
               return null;
             }
             const Icon = item.icon;

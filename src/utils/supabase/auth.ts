@@ -1,6 +1,6 @@
 import { cache } from 'react';
 import { createClient } from './server';
-import { Profile } from '@/types/database';
+import { Profile, UserRole } from '@/types/database';
 import { headers } from 'next/headers';
 
 /**
@@ -35,7 +35,7 @@ export const getAuthenticatedUser = cache(async () => {
         id: userId,
         tenant_id: tenantId,
         full_name: fullName,
-        role: role as 'owner' | 'staff',
+        role: role as UserRole,
         created_at: createdAt,
       };
 
