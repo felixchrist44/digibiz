@@ -86,14 +86,15 @@ export default function MobileScannerPage() {
       channel = supabase.channel(`inventory-checkout-${tenantId}`, {
         config: {
           broadcast: { self: false, ack: true },
-          private: false
+          private: true
         }
       });
 
-      channel.subscribe((status) => {
+      channel.subscribe((status, err?: any) => {
+        console.log('[ScannerPage] subscribe status:', status, 'error:', err || 'none');
         if (status === 'SUBSCRIBED') {
           setConnectionStatus('connected');
-        } else if (status === 'TIMED_OUT' || status === 'CLOSED') {
+        } else if (status === 'TIMED_OUT' || status === 'CLOSED' || status === 'CHANNEL_ERROR') {
           setConnectionStatus('disconnected');
         }
       });

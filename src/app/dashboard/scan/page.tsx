@@ -83,7 +83,7 @@ export default function MobileScanPage() {
       channel = supabase.channel(`inventory-checkout-${tenantId}`, {
         config: {
           broadcast: { self: false, ack: true },
-          private: false
+          private: true
         }
       });
 

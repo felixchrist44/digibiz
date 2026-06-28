@@ -182,7 +182,7 @@ export function CartProvider({
       console.log('[CP] channel topic:', topicName);
 
       channel = supabase.channel(topicName, {
-        config: { broadcast: { self: false }, private: false }
+        config: { broadcast: { self: false, ack: true }, private: true }
       });
 
       channel
