@@ -145,6 +145,7 @@ export function CartProvider({
 
   // Always-on Realtime subscription for mobile scanner broadcast
   useEffect(() => {
+    console.log('[CP] tenantId:', tenantId);
     if (!tenantId) {
       setSocketStatus('disconnected');
       return;
@@ -158,28 +159,48 @@ export function CartProvider({
       const { data: { session } } = await supabase.auth.getSession();
       if (cancelled) return;
 
+      let jwtTenantId: string | undefined = undefined;
+      let tokenPresent = false;
+      if (session?.access_token) {
+        tokenPresent = true;
+        try {
+          // Decode JWT payload to get the tenant_id in app_metadata
+          const payload = JSON.parse(atob(session.access_token.split('.')[1]));
+          jwtTenantId = payload?.app_metadata?.tenant_id;
+        } catch (e) {
+          console.error('[CP] Failed to parse JWT payload:', e);
+        }
+      }
+      console.log('[CP] jwt tenant_id:', jwtTenantId);
+      console.log('[CP] token present:', tokenPresent);
+
       if (session?.access_token) {
         supabase.realtime.setAuth(session.access_token);
       }
 
-      channel = supabase.channel(`inventory-checkout-${tenantId}`, {
+      const topicName = `inventory-checkout-${tenantId}`;
+      console.log('[CP] channel topic:', topicName);
+
+      channel = supabase.channel(topicName, {
         config: { broadcast: { self: false }, private: false }
       });
 
       channel
         .on('broadcast', { event: 'barcode-scanned' }, (payload) => {
+          console.log('[CP] RECEIVED broadcast:', payload);
           const sku = payload.payload?.sku;
           if (sku) {
             handleIncomingBarcodeRef.current(sku);
           }
         })
-        .subscribe((status) => {
+        .subscribe((status, err) => {
           if (cancelled) return;
+          console.log('[CP] subscribe status:', status, 'error:', err || 'none');
           if (status === 'SUBSCRIBED') {
             setSocketStatus('connected');
           } else if (status === 'TIMED_OUT' || status === 'CLOSED' || status === 'CHANNEL_ERROR') {
             setSocketStatus('disconnected');
-            console.error(`Realtime subscription status: ${status}`);
+            console.error(`Realtime subscription status: ${status}`, err);
           }
         });
     })();

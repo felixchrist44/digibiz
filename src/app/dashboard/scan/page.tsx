@@ -87,10 +87,11 @@ export default function MobileScanPage() {
         }
       });
 
-      channel.subscribe((status: string) => {
+      channel.subscribe((status: string, err?: any) => {
+        console.log('[ScanPage] subscribe status:', status, 'error:', err || 'none');
         if (status === 'SUBSCRIBED') {
           setConnectionStatus('connected');
-        } else if (status === 'TIMED_OUT' || status === 'CLOSED') {
+        } else if (status === 'TIMED_OUT' || status === 'CLOSED' || status === 'CHANNEL_ERROR') {
           setConnectionStatus('disconnected');
         }
       });
