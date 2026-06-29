@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { Html5Qrcode } from 'html5-qrcode';
+import { useCart } from '@/components/CartProvider';
 import {
   Camera,
   RefreshCw,
@@ -20,21 +21,14 @@ export default function MobileScanPage() {
   const [scannedCode, setScannedCode] = useState<string | null>(null);
   const [scanStatus, setScanStatus] = useState<'ready' | 'paused' | 'error'>('ready');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [broadcastSuccess, setBroadcastSuccess] = useState(false);
 
   const supabase = useMemo(() => createClient(), []);
+  const { socketStatus, sendBarcodeBroadcast } = useCart();
 
   const scannerRef = useRef<Html5Qrcode | null>(null);
-  const channelRef = useRef<any>(null);
   const cooldownRef = useRef(false);
-  const connectionStatusRef = useRef(connectionStatus);
-
-  // Sync connectionStatusRef with connectionStatus state
-  useEffect(() => {
-    connectionStatusRef.current = connectionStatus;
-  }, [connectionStatus]);
 
   // Client hydration check
   useEffect(() => {
@@ -65,47 +59,7 @@ export default function MobileScanPage() {
     });
   }, [mounted, supabase]);
 
-  // Initialize Supabase Realtime Broadcast Connection
-  useEffect(() => {
-    if (!mounted || !tenantId) return;
 
-    let channel: any = null;
-    let cancelled = false;
-
-    (async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (cancelled) return;
-
-      if (session?.access_token) {
-        supabase.realtime.setAuth(session.access_token);
-      }
-
-      channel = supabase.channel(`inventory-checkout-${tenantId}`, {
-        config: {
-          broadcast: { self: false, ack: true },
-          private: true
-        }
-      });
-
-      channel.subscribe((status: string, err?: any) => {
-        console.log('[ScanPage] subscribe status:', status, 'error:', err || 'none');
-        if (status === 'SUBSCRIBED') {
-          setConnectionStatus('connected');
-        } else if (status === 'TIMED_OUT' || status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-          setConnectionStatus('disconnected');
-        }
-      });
-
-      channelRef.current = channel;
-    })();
-
-    return () => {
-      cancelled = true;
-      if (channel) {
-        channel.unsubscribe();
-      }
-    };
-  }, [mounted, tenantId, supabase]);
 
   // Success Scan Handler
   const handleScanSuccess = async (decodedText: string) => {
@@ -121,16 +75,8 @@ export default function MobileScanPage() {
     setErrorMsg(null);
 
     // 1. Broadcast the barcode data via Supabase Realtime Broadcast
-    if (channelRef.current && connectionStatusRef.current === 'connected') {
-      const res = await channelRef.current.send({
-        type: 'broadcast',
-        event: 'barcode-scanned',
-        payload: { sku: trimmedCode }
-      });
-      setBroadcastSuccess(res === 'ok');
-    } else {
-      setBroadcastSuccess(false);
-    }
+    const res = await sendBarcodeBroadcast(trimmedCode);
+    setBroadcastSuccess(res === 'ok');
 
     // 2. Browser vibration feedback (80ms pulse)
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
@@ -228,14 +174,14 @@ export default function MobileScanPage() {
           </span>
 
           {/* Connection Status Indicator */}
-          <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider border flex items-center gap-1.5 transition-all ${connectionStatus === 'connected'
+          <span className={`px-2.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider border flex items-center gap-1.5 transition-all ${socketStatus === 'connected'
             ? 'bg-emerald-950/40 border-emerald-900/50 text-emerald-400'
-            : connectionStatus === 'connecting'
+            : socketStatus === 'connecting'
               ? 'bg-amber-950/40 border-amber-900/50 text-amber-400 animate-pulse'
               : 'bg-red-950/40 border-red-900/50 text-red-400'
             }`}>
             <Wifi className="h-3 w-3" />
-            {connectionStatus === 'connected' ? 'Soket Online' : connectionStatus === 'connecting' ? 'Menghubungkan' : 'Soket Offline'}
+            {socketStatus === 'connected' ? 'Soket Online' : socketStatus === 'connecting' ? 'Menghubungkan' : 'Soket Offline'}
           </span>
         </div>
 

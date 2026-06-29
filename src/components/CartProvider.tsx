@@ -20,6 +20,7 @@ interface CartContextType {
   removeFromCart: (id: string) => void;
   clearCart: () => void;
   handleIncomingBarcode: (sku: string) => Promise<void>;
+  sendBarcodeBroadcast: (sku: string) => Promise<string | null>;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
@@ -143,6 +144,19 @@ export function CartProvider({
     handleIncomingBarcodeRef.current = handleIncomingBarcode;
   });
 
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+  const sendBarcodeBroadcast = async (sku: string): Promise<string | null> => {
+    if (!channelRef.current || socketStatus !== 'connected') {
+      return 'disconnected';
+    }
+    return await channelRef.current.send({
+      type: 'broadcast',
+      event: 'barcode-scanned',
+      payload: { sku }
+    });
+  };
+
   // Always-on Realtime subscription for mobile scanner broadcast
   useEffect(() => {
     console.log('[CP] tenantId:', tenantId);
@@ -184,6 +198,7 @@ export function CartProvider({
       channel = supabase.channel(topicName, {
         config: { broadcast: { self: false, ack: true }, private: true }
       });
+      channelRef.current = channel;
 
       channel
         .on('broadcast', { event: 'barcode-scanned' }, (payload) => {
@@ -210,6 +225,7 @@ export function CartProvider({
       if (channel) {
         channel.unsubscribe();
       }
+      channelRef.current = null;
     };
   }, [tenantId, supabase]);
 
@@ -222,7 +238,8 @@ export function CartProvider({
         updateQty,
         removeFromCart,
         clearCart,
-        handleIncomingBarcode
+        handleIncomingBarcode,
+        sendBarcodeBroadcast
       }}
     >
       {children}
