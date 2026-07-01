@@ -32,10 +32,6 @@ export default function MobileScanPage() {
     setDisplayStatus(socketStatus);
   }, [socketStatus]);
 
-  useEffect(() => {
-    console.log('[ScanPage] socketStatus changed to:', socketStatus);
-  }, [socketStatus]);
-
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const cooldownRef = useRef(false);
 

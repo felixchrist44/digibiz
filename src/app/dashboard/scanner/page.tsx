@@ -38,10 +38,6 @@ export default function MobileScannerPage() {
     setDisplayStatus(socketStatus);
   }, [socketStatus]);
 
-  useEffect(() => {
-    console.log('[ScannerPage] socketStatus changed to:', socketStatus);
-  }, [socketStatus]);
-
   const scannerRef = useRef<Html5QrcodeScanner | null>(null);
   const cooldownRef = useRef(false);
   const cooldownTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);

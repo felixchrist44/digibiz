@@ -159,7 +159,6 @@ export function CartProvider({
 
   // Always-on Realtime subscription for mobile scanner broadcast
   useEffect(() => {
-    console.log('[CP] tenantId:', tenantId);
     if (!tenantId) {
       setSocketStatus('disconnected');
       return;
@@ -182,18 +181,15 @@ export function CartProvider({
           const payload = JSON.parse(atob(session.access_token.split('.')[1]));
           jwtTenantId = payload?.app_metadata?.tenant_id;
         } catch (e) {
-          console.error('[CP] Failed to parse JWT payload:', e);
+          console.error('Failed to parse JWT payload:', e);
         }
       }
-      console.log('[CP] jwt tenant_id:', jwtTenantId);
-      console.log('[CP] token present:', tokenPresent);
 
       if (session?.access_token) {
         supabase.realtime.setAuth(session.access_token);
       }
 
       const topicName = `inventory-checkout-${tenantId}`;
-      console.log('[CP] channel topic:', topicName);
 
       channel = supabase.channel(topicName, {
         config: { broadcast: { self: false, ack: true }, private: true }
@@ -202,7 +198,6 @@ export function CartProvider({
 
       channel
         .on('broadcast', { event: 'barcode-scanned' }, (payload) => {
-          console.log('[CP] RECEIVED broadcast:', payload);
           const sku = payload.payload?.sku;
           if (sku) {
             handleIncomingBarcodeRef.current(sku);
@@ -210,7 +205,6 @@ export function CartProvider({
         })
         .subscribe((status, err) => {
           if (cancelled) return;
-          console.log('[CP] subscribe status:', status, 'error:', err || 'none');
           if (status === 'SUBSCRIBED') {
             setSocketStatus('connected');
           } else if (status === 'TIMED_OUT' || status === 'CLOSED' || status === 'CHANNEL_ERROR') {
