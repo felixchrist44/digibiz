@@ -32,6 +32,15 @@ export default function MobileScannerPage() {
 
   const supabase = useMemo(() => createClient(), []);
   const { socketStatus, sendBarcodeBroadcast } = useCart();
+  const [displayStatus, setDisplayStatus] = useState<'connecting' | 'connected' | 'disconnected'>(socketStatus);
+
+  useEffect(() => {
+    setDisplayStatus(socketStatus);
+  }, [socketStatus]);
+
+  useEffect(() => {
+    console.log('[ScannerPage] socketStatus changed to:', socketStatus);
+  }, [socketStatus]);
 
   const scannerRef = useRef<Html5QrcodeScanner | null>(null);
   const cooldownRef = useRef(false);
@@ -187,14 +196,14 @@ export default function MobileScannerPage() {
           </span>
 
           {/* WebSocket Connection Status Tag */}
-          <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider border flex items-center gap-1 ${socketStatus === 'connected'
+          <span className={`px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider border flex items-center gap-1 ${displayStatus === 'connected'
             ? 'bg-emerald-950/40 border-emerald-900/50 text-emerald-400'
-            : socketStatus === 'connecting'
+            : displayStatus === 'connecting'
               ? 'bg-amber-950/40 border-amber-900/50 text-amber-400 animate-pulse'
               : 'bg-red-950/40 border-red-900/50 text-red-400'
             }`}>
             <Wifi className="h-3 w-3" />
-            {socketStatus === 'connected' ? 'Soket Online' : socketStatus === 'connecting' ? 'Menghubungkan' : 'Soket Offline'}
+            {displayStatus === 'connected' ? 'Soket Online' : displayStatus === 'connecting' ? 'Menghubungkan' : 'Soket Offline'}
           </span>
         </div>
 
