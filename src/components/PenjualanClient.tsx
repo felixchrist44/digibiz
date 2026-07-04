@@ -3,6 +3,7 @@
 import React, { useState, useTransition, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { checkoutPenjualan } from '@/app/dashboard/penjualan/actions';
+import { getActiveShifts } from '@/app/dashboard/shift/actions';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import {
   Search,
@@ -40,6 +41,7 @@ interface SuccessInvoice {
   total_harga: number;
   cash: number;
   change: number;
+  payment_method: 'cash' | 'qris';
 }
 export default function PenjualanClient({
   products: initialProducts,
@@ -72,6 +74,10 @@ export default function PenjualanClient({
   const [invoices, setInvoices] = useState<Penjualan[]>(initialInvoices);
   const [isPending, startTransition] = useTransition();
 
+  const [activeShiftId, setActiveShiftId] = useState<string | null>(null);
+  const [isShiftChecking, setIsShiftChecking] = useState(true);
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'qris'>('cash');
+
   // Sync state values when props change directly in render (avoids cascading render effects)
   const [prevInitialInvoices, setPrevInitialInvoices] = useState(initialInvoices);
   if (initialInvoices !== prevInitialInvoices) {
@@ -97,6 +103,28 @@ export default function PenjualanClient({
 
     return () => clearTimeout(delayDebounceFn);
   }, [search]);
+
+  // Detect active cashier shift for logged-in user
+  useEffect(() => {
+    async function checkActiveShift() {
+      try {
+        const res = await getActiveShifts();
+        if (res && res.data && profile) {
+          const myShift = res.data.find(
+            (s: any) => s.cashier_id === profile.id && s.status === 'open'
+          );
+          if (myShift) {
+            setActiveShiftId(myShift.id);
+          }
+        }
+      } catch (err) {
+        console.error('Error checking active cashier shift:', err);
+      } finally {
+        setIsShiftChecking(false);
+      }
+    }
+    checkActiveShift();
+  }, [profile]);
 
   // Modals state
   const [successInvoice, setSuccessInvoice] = useState<SuccessInvoice | null>(null);
@@ -136,7 +164,7 @@ export default function PenjualanClient({
   const totalPrice = cart.reduce((sum, item) => sum + item.harga * item.jumlah, 0);
   const cashNum = Number(cashReceived) || 0;
   const change = cashNum >= totalPrice ? cashNum - totalPrice : 0;
-  const isCashSufficient = cashNum >= totalPrice || totalPrice === 0;
+  const isCashSufficient = paymentMethod === 'qris' || cashNum >= totalPrice || totalPrice === 0;
 
   // Format currency
   const formatIDR = (value: number) => {
@@ -153,7 +181,7 @@ export default function PenjualanClient({
     setErrorMsg(null);
 
     startTransition(async () => {
-      const res = await checkoutPenjualan(cart);
+      const res = await checkoutPenjualan(cart, paymentMethod, activeShiftId);
       if (res?.error) {
         setErrorMsg(res.error);
       } else if (res?.success) {
@@ -161,9 +189,10 @@ export default function PenjualanClient({
         setSuccessInvoice({
           nomor_invoice: res.nomor_invoice,
           total_harga: res.total_harga,
-          cash: cashNum,
-          change: cashNum - Number(res.total_harga),
-          items: [...cart]
+          cash: paymentMethod === 'qris' ? Number(res.total_harga) : cashNum,
+          change: paymentMethod === 'qris' ? 0 : cashNum - Number(res.total_harga),
+          items: [...cart],
+          payment_method: paymentMethod
         });
 
         // Clear cart
@@ -175,6 +204,7 @@ export default function PenjualanClient({
       }
     });
   };
+
 
   // View Invoice Detail (lazy fetch)
   const viewInvoiceDetail = async (invoice: Penjualan) => {
@@ -388,28 +418,67 @@ export default function PenjualanClient({
                   <span className="text-lg font-black text-indigo-400">{formatIDR(totalPrice)}</span>
                 </div>
 
-                {/* Cash Payment received */}
+                {/* Payment Method Selector */}
                 <div className="space-y-2">
-                  <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Uang Diterima (Cash)</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500">Rp</span>
-                    <input
-                      type="number"
-                      placeholder="Contoh: 50000"
-                      value={cashReceived}
-                      onChange={(e) => setCashReceived(e.target.value)}
-                      className="w-full pl-9 pr-3 py-2.5 bg-slate-950/40 border border-slate-800 rounded-xl text-slate-200 placeholder-slate-650 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold"
-                    />
+                  <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Metode Pembayaran</label>
+                  <div className="flex bg-slate-950/60 p-1 rounded-xl border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('cash')}
+                      className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${
+                        paymentMethod === 'cash'
+                          ? 'bg-indigo-600 text-white shadow-md'
+                          : 'text-slate-450 hover:text-slate-200'
+                      }`}
+                    >
+                      Cash
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('qris')}
+                      className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${
+                        paymentMethod === 'qris'
+                          ? 'bg-indigo-600 text-white shadow-md'
+                          : 'text-slate-450 hover:text-slate-200'
+                      }`}
+                    >
+                      QRIS
+                    </button>
                   </div>
                 </div>
 
+                {/* Cash Payment received */}
+                {paymentMethod === 'cash' && (
+                  <div className="space-y-2">
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider">Uang Diterima (Cash)</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-500">Rp</span>
+                      <input
+                        type="number"
+                        placeholder="Contoh: 50000"
+                        value={cashReceived}
+                        onChange={(e) => setCashReceived(e.target.value)}
+                        className="w-full pl-9 pr-3 py-2.5 bg-slate-950/40 border border-slate-800 rounded-xl text-slate-200 placeholder-slate-650 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm font-bold"
+                      />
+                    </div>
+                  </div>
+                )}
+
                 {/* Change return */}
-                {cashReceived && (
+                {paymentMethod === 'cash' && cashReceived && (
                   <div className="flex justify-between items-center p-3 rounded-xl bg-slate-950/40 border border-slate-800">
                     <span className="text-xs text-slate-400 font-semibold">Kembalian:</span>
                     <span className={`text-sm font-extrabold ${isCashSufficient ? 'text-emerald-400' : 'text-red-400'}`}>
                       {isCashSufficient ? formatIDR(change) : 'Uang Kurang'}
                     </span>
+                  </div>
+                )}
+
+                {/* Shift Warning Banner */}
+                {!activeShiftId && !isShiftChecking && (
+                  <div className="flex items-start gap-2 p-3 bg-amber-950/30 border border-amber-900/40 rounded-xl text-amber-400 text-xs">
+                    <Info className="h-4 w-4 shrink-0 mt-0.5" />
+                    <span>Tidak ada shift aktif — hubungi manager</span>
                   </div>
                 )}
 
@@ -429,6 +498,7 @@ export default function PenjualanClient({
                   Bayar & Selesaikan Transaksi
                   <ArrowRight className="h-4 w-4" />
                 </button>
+
 
                 {/* Clear all button */}
                 <button
@@ -563,14 +633,23 @@ export default function PenjualanClient({
                 <span>TOTAL AKHIR:</span>
                 <span>{formatIDR(successInvoice.total_harga)}</span>
               </div>
-              <div className="flex justify-between text-slate-650">
-                <span>Tunai Dibayar:</span>
-                <span>{formatIDR(successInvoice.cash)}</span>
-              </div>
-              <div className="flex justify-between text-slate-650 font-bold border-t border-slate-200 pt-1">
-                <span>Kembalian:</span>
-                <span>{formatIDR(successInvoice.change)}</span>
-              </div>
+              {successInvoice.payment_method === 'cash' ? (
+                <>
+                  <div className="flex justify-between text-slate-650">
+                    <span>Tunai Dibayar:</span>
+                    <span>{formatIDR(successInvoice.cash)}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-650 font-bold border-t border-slate-200 pt-1">
+                    <span>Kembalian:</span>
+                    <span>{formatIDR(successInvoice.change)}</span>
+                  </div>
+                </>
+              ) : (
+                <div className="flex justify-between text-slate-650 font-bold border-t border-slate-200 pt-1">
+                  <span>Metode Pembayaran:</span>
+                  <span className="text-indigo-600 font-bold">QRIS</span>
+                </div>
+              )}
             </div>
 
             {/* Action buttons */}

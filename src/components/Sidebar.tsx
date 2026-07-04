@@ -22,7 +22,8 @@ import {
   ShoppingCart,
   Camera,
   BarChart3,
-  Settings
+  Settings,
+  Clock
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -116,6 +117,7 @@ export default function Sidebar({ user, children }: SidebarProps) {
     { name: 'Daftar Produk', href: '/dashboard/produk', icon: Package },
     { name: 'Pemindai Mobile', href: '/dashboard/scan', icon: Camera },
     { name: 'Transaksi Penjualan', href: '/dashboard/penjualan', icon: ShoppingCart },
+    { name: 'Shift Kasir', href: '/dashboard/shift', icon: Clock },
     { name: 'Riwayat Penjualan', href: '/dashboard/riwayat-penjualan', icon: History },
     { name: 'Riwayat Aktivitas', href: '/dashboard/aktivitas', icon: History },
     { name: 'Laporan Keuangan', href: '/dashboard/laporan', icon: BarChart3 },

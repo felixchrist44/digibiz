@@ -13,7 +13,9 @@ import {
   UserCog,
   Filter,
   XCircle,
-  Settings
+  Settings,
+  LogIn,
+  LogOut
 } from 'lucide-react';
 
 interface AuditEntry {
@@ -46,6 +48,8 @@ const ACTION_META: Record<
   role_change:    { label: 'Ubah Peran', icon: UserCog, cls: 'bg-purple-500/10 text-purple-400 border-purple-500/20' },
   sale_nullify:   { label: 'Transaksi Dibatalkan', icon: XCircle, cls: 'bg-red-500/10 text-red-400 border-red-500/20' },
   settings_update: { label: 'Pengaturan Diperbarui', icon: Settings, cls: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' },
+  shift_open:     { label: 'Shift Buka', icon: LogIn, cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
+  shift_close:    { label: 'Shift Tutup', icon: LogOut, cls: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
 };
 
 const FILTERS: { value: string | null; label: string }[] = [
@@ -58,6 +62,8 @@ const FILTERS: { value: string | null; label: string }[] = [
   { value: 'role_change', label: 'Peran' },
   { value: 'sale_nullify', label: 'Pembatalan' },
   { value: 'settings_update', label: 'Pengaturan Struk' },
+  { value: 'shift_open', label: 'Shift Buka' },
+  { value: 'shift_close', label: 'Shift Tutup' },
 ];
 
 const formatIDR = (v: number) =>
@@ -94,6 +100,17 @@ function describeDetail(entry: AuditEntry): string {
         changes.push(`Edit: [${d.fields.join(', ')}]`);
       }
       return changes.join(' • ') || 'Pengaturan diperbarui';
+    }
+    case 'shift_open':
+      return `Saldo Awal: ${formatIDR(Number(d.opening_cash ?? 0))}`;
+    case 'shift_close': {
+      const parts = [];
+      parts.push(`Kas Aktual: ${formatIDR(Number(d.closing_cash ?? 0))}`);
+      parts.push(`QRIS Aktual: ${formatIDR(Number(d.closing_qris ?? 0))}`);
+      if (d.notes) {
+        parts.push(`Catatan: ${d.notes}`);
+      }
+      return parts.join(' • ');
     }
     default:
       return '';

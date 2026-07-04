@@ -10,7 +10,11 @@ interface CartItem {
   jumlah: number;
 }
 
-export async function checkoutPenjualan(cart: CartItem[]) {
+export async function checkoutPenjualan(
+  cart: CartItem[],
+  payment_method: 'cash' | 'qris' = 'cash',
+  shift_id: string | null = null
+) {
   if (cart.length === 0) {
     return { error: 'Keranjang belanja kosong.' };
   }
@@ -37,8 +41,11 @@ export async function checkoutPenjualan(cart: CartItem[]) {
         produk_id: item.id,
         jumlah: item.jumlah,
         harga_satuan: item.harga
-      }))
+      })),
+      p_payment_method: payment_method,
+      p_shift_id: shift_id
     });
+
 
     if (txError) {
       return { error: `Transaksi gagal: ${txError.message}` };

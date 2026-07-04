@@ -28,3 +28,6 @@ export function canManageSettings(role: UserRole | string): boolean {
   return role === 'owner';
 }
 
+export function canManageShifts(role: UserRole | string): boolean {
+  return role === 'owner' || role === 'manager';
+}

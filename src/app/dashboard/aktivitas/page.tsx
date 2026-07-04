@@ -20,6 +20,8 @@ const VALID_ACTIONS = [
   'role_change',
   'sale_nullify',
   'settings_update',
+  'shift_open',
+  'shift_close',
 ];
 
 export default async function AktivitasPage({ searchParams }: PageProps) {

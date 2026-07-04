@@ -11,7 +11,9 @@ export interface AuditLogParam {
     | 'stock_adjust'
     | 'role_change'
     | 'sale_nullify'
-    | 'settings_update';
+    | 'settings_update'
+    | 'shift_open'
+    | 'shift_close';
   target_type: string;
   target_id: string;
   target_name: string;
