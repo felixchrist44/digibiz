@@ -2,7 +2,8 @@
 
 import React, { useState, useTransition, useEffect } from 'react';
 import { createClient } from '@/utils/supabase/client';
-import { checkoutPenjualan } from '@/app/dashboard/penjualan/actions';
+import { checkoutPenjualan, getReceiptSettings } from '@/app/dashboard/penjualan/actions';
+import ReceiptDocument from '@/components/ReceiptDocument';
 import { getActiveShifts } from '@/app/dashboard/shift/actions';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import {
@@ -32,16 +33,15 @@ interface Props {
 
 interface SuccessInvoice {
   nomor_invoice: string;
-  items: {
-    id: string;
-    nama: string;
-    harga: number;
-    jumlah: number;
-  }[];
+  items: CartItem[];
+  subtotal: number;
+  tax_amount: number;
+  total: number;
   total_harga: number;
   cash: number;
   change: number;
   payment_method: 'cash' | 'qris';
+  created_at: string;
 }
 export default function PenjualanClient({
   products: initialProducts,
@@ -77,6 +77,24 @@ export default function PenjualanClient({
   const [activeShiftId, setActiveShiftId] = useState<string | null>(null);
   const [isShiftChecking, setIsShiftChecking] = useState(true);
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'qris'>('cash');
+
+  const [receiptSettings, setReceiptSettings] = useState({
+    store_name: '',
+    store_address: null as string | null,
+    receipt_header: null as string | null,
+    receipt_footer: null as string | null,
+    tax_enabled: false,
+    tax_rate: 0
+  });
+
+  const [taxToggled, setTaxToggled] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return localStorage.getItem('pos-tax-toggled') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   // Sync state values when props change directly in render (avoids cascading render effects)
   const [prevInitialInvoices, setPrevInitialInvoices] = useState(initialInvoices);
@@ -126,6 +144,22 @@ export default function PenjualanClient({
     checkActiveShift();
   }, [profile]);
 
+  // Fetch receipt settings once on mount
+  useEffect(() => {
+    getReceiptSettings().then(s => {
+      if (s && s.data) {
+        setReceiptSettings(s.data);
+      }
+    });
+  }, []);
+
+  // Persist PPN tax toggle state preference to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('pos-tax-toggled', String(taxToggled));
+    } catch {}
+  }, [taxToggled]);
+
   // Modals state
   const [successInvoice, setSuccessInvoice] = useState<SuccessInvoice | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<Penjualan | null>(null);
@@ -161,10 +195,16 @@ export default function PenjualanClient({
   };
 
   // Calculations
-  const totalPrice = cart.reduce((sum, item) => sum + item.harga * item.jumlah, 0);
+  const subtotal = cart.reduce((sum, item) => sum + item.harga * item.jumlah, 0);
+  const taxApplied = receiptSettings.tax_enabled && taxToggled;
+  const tax_amount = taxApplied
+    ? Math.round(subtotal * (receiptSettings.tax_rate / 100))
+    : 0;
+  const totalBayar = subtotal + tax_amount;
+
   const cashNum = Number(cashReceived) || 0;
-  const change = cashNum >= totalPrice ? cashNum - totalPrice : 0;
-  const isCashSufficient = paymentMethod === 'qris' || cashNum >= totalPrice || totalPrice === 0;
+  const isCashSufficient = paymentMethod === 'qris' || cashNum >= totalBayar;
+  const change = cashNum >= totalBayar ? cashNum - totalBayar : 0;
 
   // Format currency
   const formatIDR = (value: number) => {
@@ -181,25 +221,32 @@ export default function PenjualanClient({
     setErrorMsg(null);
 
     startTransition(async () => {
-      const res = await checkoutPenjualan(cart, paymentMethod, activeShiftId);
+      const res = await checkoutPenjualan(
+        cart,
+        paymentMethod,
+        activeShiftId,
+        tax_amount,
+        taxApplied
+      );
+
       if (res?.error) {
         setErrorMsg(res.error);
       } else if (res?.success) {
-        // Show success modal
         setSuccessInvoice({
           nomor_invoice: res.nomor_invoice,
-          total_harga: res.total_harga,
-          cash: paymentMethod === 'qris' ? Number(res.total_harga) : cashNum,
-          change: paymentMethod === 'qris' ? 0 : cashNum - Number(res.total_harga),
           items: [...cart],
-          payment_method: paymentMethod
+          subtotal,
+          tax_amount,
+          total: totalBayar,
+          total_harga: res.total_harga,
+          cash: paymentMethod === 'qris' ? totalBayar : cashNum,
+          change: paymentMethod === 'qris' ? 0 : cashNum - totalBayar,
+          payment_method: paymentMethod,
+          created_at: new Date().toISOString()
         });
 
-        // Clear cart
         clearCart();
         setCashReceived('');
-
-        // Refresh dynamic server routes
         router.refresh();
       }
     });
@@ -413,9 +460,45 @@ export default function PenjualanClient({
             {/* Calculations & Cash Input */}
             {cart.length > 0 && (
               <div className="space-y-4 pt-4 border-t border-slate-850">
+                {/* Subtotal */}
                 <div className="flex justify-between items-center text-sm">
-                  <span className="text-slate-450 font-semibold">Total Harga:</span>
-                  <span className="text-lg font-black text-indigo-400">{formatIDR(totalPrice)}</span>
+                  <span className="text-slate-450 font-semibold">Subtotal:</span>
+                  <span className="font-bold text-white">{formatIDR(subtotal)}</span>
+                </div>
+
+                {/* PPN Tax toggle — only when tax is enabled in settings */}
+                {receiptSettings.tax_enabled && (
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-slate-400">
+                        PPN {receiptSettings.tax_rate}%
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setTaxToggled(t => !t)}
+                        className={`px-3 py-1 rounded-full text-xs font-bold transition-all ${
+                          taxToggled
+                            ? 'bg-indigo-600 text-white'
+                            : 'bg-slate-800 text-slate-400 border border-slate-700'
+                        }`}
+                      >
+                        {taxToggled ? 'ON' : 'OFF'}
+                      </button>
+                    </div>
+                    {taxToggled && (
+                      <span className="text-sm font-bold text-indigo-400">
+                        +{formatIDR(tax_amount)}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Total Bayar — what customer actually pays */}
+                <div className="flex justify-between items-center pt-2 border-t border-slate-800">
+                  <span className="text-slate-455 font-semibold">Total Bayar:</span>
+                  <span className="text-lg font-black text-indigo-400">
+                    {formatIDR(totalBayar)}
+                  </span>
                 </div>
 
                 {/* Payment Method Selector */}
@@ -747,6 +830,32 @@ export default function PenjualanClient({
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Hidden receipt for printing — visible only via @media print */}
+      {successInvoice && (
+        <div id="receipt-print-area">
+          <ReceiptDocument
+            invoice={{
+              nomor_invoice: successInvoice.nomor_invoice,
+              items: successInvoice.items.map(item => ({
+                id: item.id,
+                nama: item.nama,
+                jumlah: item.jumlah,
+                harga: item.harga
+              })),
+              subtotal: successInvoice.subtotal,
+              tax_amount: successInvoice.tax_amount,
+              total: successInvoice.total,
+              payment_method: successInvoice.payment_method,
+              cash: successInvoice.cash,
+              change: successInvoice.change,
+              created_at: successInvoice.created_at
+            }}
+            settings={receiptSettings}
+            cashierName={profile?.full_name ?? 'Kasir'}
+          />
         </div>
       )}
     </div>
