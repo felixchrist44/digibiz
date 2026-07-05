@@ -36,22 +36,24 @@ body {
 }
 
 @media print {
-  body * {
-    visibility: hidden;
+  /* Hide all direct body children — removes from layout flow (no phantom height) */
+  body > * {
+    display: none !important;
   }
-  #receipt-print-area,
-  #receipt-print-area * {
-    visibility: visible;
-  }
-  #receipt-print-area {
-    position: fixed;
-    top: 0;
-    left: 0;
+  /* Show only the receipt portal container */
+  body > #receipt-print-area {
+    display: block !important;
+    position: static !important;
     width: 80mm;
+    margin: 0;
+    padding: 4mm;
     font-family: monospace;
     font-size: 12px;
     color: #000;
     background: #fff;
+  }
+  body > #receipt-print-area * {
+    visibility: visible !important;
   }
   @page {
     margin: 0;

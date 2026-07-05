@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useTransition, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { createClient } from '@/utils/supabase/client';
 import { checkoutPenjualan, getReceiptSettings } from '@/app/dashboard/penjualan/actions';
 import ReceiptDocument from '@/components/ReceiptDocument';
@@ -833,9 +834,9 @@ export default function PenjualanClient({
         </div>
       )}
 
-      {/* Hidden receipt for printing — visible only via @media print */}
-      {successInvoice && (
-        <div id="receipt-print-area">
+      {/* Receipt portal — renders at body level for clean print isolation */}
+      {successInvoice && typeof document !== 'undefined' && createPortal(
+        <div id="receipt-print-area" style={{ display: 'none' }}>
           <ReceiptDocument
             invoice={{
               nomor_invoice: successInvoice.nomor_invoice,
@@ -856,7 +857,8 @@ export default function PenjualanClient({
             settings={receiptSettings}
             cashierName={profile?.full_name ?? 'Kasir'}
           />
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

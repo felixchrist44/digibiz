@@ -61,7 +61,7 @@ export default function ReceiptDocument({ invoice, settings, cashierName }: Prop
   };
 
   return (
-    <div id="receipt-print-area" className="hidden print:block text-black bg-white p-4 mx-auto w-[80mm] font-mono text-xs leading-relaxed">
+    <div className="text-black bg-white p-4 mx-auto w-[80mm] font-mono text-xs leading-relaxed">
       {/* Header Info */}
       <div className="text-center space-y-1">
         <h2 className="text-sm font-bold uppercase tracking-tight">{settings.store_name}</h2>
