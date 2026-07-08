@@ -56,7 +56,13 @@ export async function checkoutPenjualan(
 
 
     if (txError) {
-      return { error: `Transaksi gagal: ${txError.message}` };
+      let errMsg = txError.message;
+      if (errMsg.includes('SHIFT_REQUIRED')) {
+        errMsg = 'Penjualan tunai membutuhkan shift kasir yang aktif.';
+      } else if (errMsg.includes('SHIFT_INVALID')) {
+        errMsg = 'Shift tidak aktif atau bukan milik kasir ini.';
+      }
+      return { error: `Transaksi gagal: ${errMsg}` };
     }
 
     // Fetch authoritative stored truth from the database to align with idempotency-deduplicated retries
