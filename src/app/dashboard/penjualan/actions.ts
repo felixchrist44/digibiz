@@ -15,7 +15,8 @@ export async function checkoutPenjualan(
   payment_method: 'cash' | 'qris' = 'cash',
   shift_id: string | null = null,
   tax_amount: number = 0,
-  tax_enabled: boolean = false
+  tax_enabled: boolean = false,
+  idempotency_key: string | null = null
 ) {
   if (cart.length === 0) {
     return { error: 'Keranjang belanja kosong.' };
@@ -49,12 +50,24 @@ export async function checkoutPenjualan(
       p_payment_method: payment_method,
       p_shift_id: shift_id,
       p_tax_amount: tax_amount,
-      p_tax_enabled: tax_enabled
+      p_tax_enabled: tax_enabled,
+      p_idempotency_key: idempotency_key
     });
 
 
     if (txError) {
       return { error: `Transaksi gagal: ${txError.message}` };
+    }
+
+    // Fetch authoritative stored truth from the database to align with idempotency-deduplicated retries
+    const { data: storedSale, error: fetchError } = await supabase
+      .from('penjualan')
+      .select('nomor_invoice, total_harga')
+      .eq('id', penjualanId)
+      .single();
+
+    if (fetchError || !storedSale) {
+      return { error: `Gagal memverifikasi transaksi: ${fetchError?.message || 'Data tidak ditemukan.'}` };
     }
 
     revalidatePath('/dashboard/penjualan');
@@ -64,8 +77,8 @@ export async function checkoutPenjualan(
 
     return {
       success: true,
-      nomor_invoice,
-      total_harga,
+      nomor_invoice: storedSale.nomor_invoice,
+      total_harga: Number(storedSale.total_harga),
       invoice_id: penjualanId
     };
   } catch (err: any) {

@@ -34,6 +34,12 @@ export async function updateSession(request: NextRequest) {
   // Refresh session if expired
   const { data: { user } } = await supabase.auth.getUser();
 
+  if (user && !user.app_metadata?.tenant_id) {
+    console.warn(
+      "⚠️ CRITICAL WARNING: Supabase Auth custom token hook 'inject_tenant_id_to_jwt' is missing or not registered in your Supabase project settings. Multi-tenancy RLS policies will fail and users will see empty data. Please register this hook in the Supabase Dashboard under Auth -> Hooks."
+    );
+  }
+
   const isDashboard = request.nextUrl.pathname.startsWith('/dashboard');
   const isLogin = request.nextUrl.pathname.startsWith('/login');
 

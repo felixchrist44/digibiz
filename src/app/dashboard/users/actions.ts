@@ -39,10 +39,10 @@ export async function updateUserRole(targetUserId: string, targetRole: UserRole)
 
   const currentRole = targetProfile.role as UserRole;
 
-  const { error } = await supabase
-    .from('profiles')
-    .update({ role: targetRole })
-    .eq('id', targetUserId);
+  const { error } = await supabase.rpc('set_user_role', {
+    p_target_user_id: targetUserId,
+    p_new_role: targetRole,
+  });
 
   if (error) {
     return { error: error.message };

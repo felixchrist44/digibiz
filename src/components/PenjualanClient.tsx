@@ -56,6 +56,7 @@ export default function PenjualanClient({
   const pathname = usePathname();
 
   const supabase = React.useMemo(() => createClient(), []);
+  const checkoutIdempotencyKeyRef = React.useRef<string | null>(null);
   const [processedScan, setProcessedScan] = useState<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<'pos' | 'history'>('pos');
@@ -161,6 +162,11 @@ export default function PenjualanClient({
     } catch {}
   }, [taxToggled]);
 
+  // Reset idempotency key when cart content changes
+  useEffect(() => {
+    checkoutIdempotencyKeyRef.current = null;
+  }, [cart]);
+
   // Modals state
   const [successInvoice, setSuccessInvoice] = useState<SuccessInvoice | null>(null);
   const [selectedInvoice, setSelectedInvoice] = useState<Penjualan | null>(null);
@@ -193,6 +199,7 @@ export default function PenjualanClient({
   const handleClearCart = () => {
     clearCart();
     setCashReceived('');
+    checkoutIdempotencyKeyRef.current = null;
   };
 
   // Calculations
@@ -221,18 +228,27 @@ export default function PenjualanClient({
     if (cart.length === 0) return;
     setErrorMsg(null);
 
+    // Initialize checkout idempotency key once per checkout attempt sequence
+    if (!checkoutIdempotencyKeyRef.current) {
+      checkoutIdempotencyKeyRef.current = crypto.randomUUID();
+    }
+    const idempotencyKey = checkoutIdempotencyKeyRef.current;
+
     startTransition(async () => {
       const res = await checkoutPenjualan(
         cart,
         paymentMethod,
         activeShiftId,
         tax_amount,
-        taxApplied
+        taxApplied,
+        idempotencyKey
       );
 
       if (res?.error) {
         setErrorMsg(res.error);
       } else if (res?.success) {
+        // Clear key on success
+        checkoutIdempotencyKeyRef.current = null;
         setSuccessInvoice({
           nomor_invoice: res.nomor_invoice,
           items: [...cart],

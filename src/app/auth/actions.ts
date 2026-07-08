@@ -47,8 +47,8 @@ export async function signup(prevState: any, formData: FormData) {
     return { error: 'Nama toko wajib diisi untuk pendaftaran baru.' };
   }
 
-  if (password.length < 6) {
-    return { error: 'Kata sandi minimal harus 6 karakter.' };
+  if (password.length < 8) {
+    return { error: 'Kata sandi minimal harus 8 karakter.' };
   }
 
   const supabase = await createClient();
