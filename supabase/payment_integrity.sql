@@ -24,7 +24,6 @@ DECLARE
   v_tanggal DATE;
   v_seq INTEGER;
   v_nomor_invoice TEXT;
-  v_shift_ok BOOLEAN;
   v_subtotal NUMERIC := 0;
   v_tax_amount NUMERIC := 0;
   v_total_harga NUMERIC := 0;
@@ -52,7 +51,7 @@ BEGIN
       RAISE EXCEPTION 'SHIFT_REQUIRED: Penjualan tunai membutuhkan shift kasir yang aktif.';
     END IF;
 
-    SELECT true INTO v_shift_ok
+    PERFORM true
     FROM public.kasir_shift
     WHERE id = p_shift_id
       AND tenant_id = v_tenant_id
@@ -81,8 +80,8 @@ BEGIN
     FROM public.produk
     WHERE id = v_item.produk_id AND tenant_id = v_tenant_id;
 
-    IF NOT FOUND THEN
-      RAISE EXCEPTION 'PRODUK_INVALID: Produk tidak ditemukan di tenant ini.';
+    IF NOT FOUND OR v_harga_jual IS NULL THEN
+      RAISE EXCEPTION 'PRODUK_INVALID: Produk tidak ditemukan atau tidak aktif.';
     END IF;
 
     v_subtotal := v_subtotal + (v_harga_jual * v_item.jumlah);
@@ -97,13 +96,16 @@ BEGIN
 
   v_total_harga := v_subtotal + v_tax_amount;
 
-  -- Enforce Payment Integrity: Reject transaction if total or tax doesn't match server truth
-  IF p_total_harga IS DISTINCT FROM v_total_harga THEN
-    RAISE EXCEPTION 'PRICE_MISMATCH: Total harga transaksi (%) tidak sesuai dengan perhitungan server (%).', p_total_harga, v_total_harga;
+  -- Enforce Payment Integrity. Attribute the error precisely so the client
+  -- refresh reloads the right thing: subtotal drift = PRICE (a product's price
+  -- changed), tax drift = TAX (rate/toggle changed). Check subtotal FIRST — a
+  -- price change also moves the total, and we must not mislabel it as a tax error.
+  IF (p_total_harga - p_tax_amount) IS DISTINCT FROM v_subtotal THEN
+    RAISE EXCEPTION 'PRICE_MISMATCH: Harga produk telah berubah. Silakan perbarui harga.';
   END IF;
 
   IF p_tax_amount IS DISTINCT FROM v_tax_amount THEN
-    RAISE EXCEPTION 'TAX_MISMATCH: Jumlah pajak (%) tidak sesuai dengan perhitungan server (%).', p_tax_amount, v_tax_amount;
+    RAISE EXCEPTION 'TAX_MISMATCH: Pengaturan pajak telah berubah. Silakan perbarui harga.';
   END IF;
 
   -- Derive daily invoice sequence (INV-YYYYMMDD-00001 format, per-tenant, WIB timezone)

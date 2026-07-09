@@ -67,7 +67,8 @@ export default function PenjualanClient({
     updateQty,
     removeFromCart,
     clearCart,
-    handleIncomingBarcode
+    handleIncomingBarcode,
+    updateCart
   } = useCart();
 
   const [search, setSearch] = useState('');
@@ -200,6 +201,50 @@ export default function PenjualanClient({
     clearCart();
     setCashReceived('');
     checkoutIdempotencyKeyRef.current = null;
+  };
+
+  const refreshPricesAndSettings = async () => {
+    setErrorMsg(null);
+    try {
+      // 1. Fetch latest receipt settings to refresh tax rules
+      const settingsRes = await getReceiptSettings();
+      if (settingsRes && settingsRes.data) {
+        setReceiptSettings(settingsRes.data);
+      }
+
+      // 2. Fetch latest prices and stock levels for cart items directly from Supabase
+      if (cart.length > 0) {
+        const { data: latestProducts, error } = await supabase
+          .from('produk')
+          .select('id, harga, stok_saat_ini')
+          .in('id', cart.map(item => item.id));
+
+        if (!error && latestProducts) {
+          const updatedCart = cart
+            .map(item => {
+              const fresh = latestProducts.find(p => p.id === item.id);
+              if (!fresh || fresh.stok_saat_ini === 0) {
+                // Drop vanished or completely out-of-stock items
+                return null;
+              }
+              const newMaxStok = fresh.stok_saat_ini;
+              // Cap jumlah if it exceeds new maximum stock
+              const newJumlah = Math.min(item.jumlah, newMaxStok);
+              return {
+                ...item,
+                harga: Number(fresh.harga),
+                maxStok: newMaxStok,
+                jumlah: newJumlah
+              };
+            })
+            .filter((item): item is CartItem => item !== null);
+
+          updateCart(updatedCart);
+        }
+      }
+    } catch (err) {
+      console.error('Gagal memperbarui harga dan pengaturan:', err);
+    }
   };
 
   // Calculations
@@ -584,8 +629,17 @@ export default function PenjualanClient({
 
                 {/* Checkout error message */}
                 {errorMsg && (
-                  <div className="p-3 bg-red-950/40 border border-red-900/50 rounded-xl text-xs text-red-400">
-                    {errorMsg}
+                  <div className="p-3 bg-red-950/40 border border-red-900/50 rounded-xl text-xs text-red-400 space-y-2">
+                    <div>{errorMsg}</div>
+                    {(errorMsg.includes('harga') || errorMsg.includes('pajak') || errorMsg.includes('MISMATCH')) && (
+                      <button
+                        type="button"
+                        onClick={refreshPricesAndSettings}
+                        className="w-full py-1.5 bg-red-900 hover:bg-red-800 text-white rounded-lg text-[10px] font-bold transition-all"
+                      >
+                        Perbarui Harga & Pajak
+                      </button>
+                    )}
                   </div>
                 )}
 

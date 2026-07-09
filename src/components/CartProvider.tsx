@@ -21,6 +21,7 @@ interface CartContextType {
   clearCart: () => void;
   handleIncomingBarcode: (sku: string) => Promise<void>;
   sendBarcodeBroadcast: (sku: string) => Promise<string | null>;
+  updateCart: (items: CartItem[]) => void;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
@@ -223,6 +224,10 @@ export function CartProvider({
     };
   }, [tenantId, supabase]);
 
+  const updateCart = (items: CartItem[]) => {
+    setCart(items);
+  };
+
   return (
     <CartContext.Provider
       value={{
@@ -233,7 +238,8 @@ export function CartProvider({
         removeFromCart,
         clearCart,
         handleIncomingBarcode,
-        sendBarcodeBroadcast
+        sendBarcodeBroadcast,
+        updateCart
       }}
     >
       {children}

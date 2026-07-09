@@ -61,6 +61,10 @@ export async function checkoutPenjualan(
         errMsg = 'Penjualan tunai membutuhkan shift kasir yang aktif.';
       } else if (errMsg.includes('SHIFT_INVALID')) {
         errMsg = 'Shift tidak aktif atau bukan milik kasir ini.';
+      } else if (errMsg.includes('PRICE_MISMATCH')) {
+        errMsg = 'Harga produk di kasir telah berubah. Silakan klik tombol perbarui harga.';
+      } else if (errMsg.includes('TAX_MISMATCH')) {
+        errMsg = 'Pengaturan pajak toko telah berubah. Silakan klik tombol perbarui harga.';
       }
       return { error: `Transaksi gagal: ${errMsg}` };
     }
