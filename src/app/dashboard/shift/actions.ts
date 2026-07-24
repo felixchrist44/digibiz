@@ -5,12 +5,14 @@ import { getAuthenticatedUser } from '@/utils/supabase/auth';
 import { revalidatePath } from 'next/cache';
 import { writeAuditLog } from '@/utils/supabase/audit';
 import { canManageShifts } from '@/utils/permissions';
+import { logger } from '@/lib/logger';
 
 export async function openShift(formData: FormData) {
   const { user, profile, supabase } = await getAuthenticatedUser();
   if (!user || !profile) return { error: 'Sesi kedaluwarsa. Silakan masuk kembali.' };
 
   if (!canManageShifts(profile.role)) {
+    logger.warn('Unauthorized openShift attempt', { action: 'open_shift', code: 'UNAUTHORIZED', tenant_id: profile.tenant_id });
     return { error: 'Hanya Owner atau Manager yang berhak membuka shift.' };
   }
 
@@ -30,10 +32,28 @@ export async function openShift(formData: FormData) {
     });
 
     if (rpcError) {
-      return { error: `Gagal membuka shift: ${rpcError.message}` };
+      let errMsg = rpcError.message;
+      let code: string | undefined = undefined;
+
+      if (rpcError.code === '23505' || errMsg.includes('unique_active_cashier_shift')) {
+        code = 'CASHIER_SHIFT_ACTIVE';
+        errMsg = 'Kasir ini masih memiliki shift yang aktif. Harap tutup shift sebelumnya terlebih dahulu.';
+      } else if (errMsg.includes('Hanya Owner atau Manager')) {
+        code = 'UNAUTHORIZED';
+        errMsg = 'Hanya Owner atau Manager yang berhak membuka shift.';
+      }
+
+      if (code) {
+        logger.warn(`openShift failed: ${errMsg}`, { action: 'open_shift', code, tenant_id: profile.tenant_id });
+      } else {
+        logger.error(rpcError, { action: 'open_shift', tenant_id: profile.tenant_id });
+        errMsg = 'Gagal membuka shift karena kesalahan database.';
+      }
+
+      return { error: errMsg, code };
     }
 
-    // Write audit log entry (fire-and-forget)
+    // Write audit log entry
     await writeAuditLog(supabase, {
       actor_id: user.id,
       actor_name: profile.full_name || 'Owner/Manager',
@@ -48,7 +68,8 @@ export async function openShift(formData: FormData) {
     revalidatePath('/dashboard/laporan');
     return { success: true, shiftId };
   } catch (err: any) {
-    return { error: err.message || 'Terjadi kesalahan tidak terduga.' };
+    logger.error(err, { action: 'open_shift_uncaught', tenant_id: profile?.tenant_id });
+    return { error: 'Terjadi kesalahan internal server saat membuka shift.' };
   }
 }
 
@@ -57,6 +78,7 @@ export async function closeShift(formData: FormData) {
   if (!user || !profile) return { error: 'Sesi kedaluwarsa. Silakan masuk kembali.' };
 
   if (!canManageShifts(profile.role)) {
+    logger.warn('Unauthorized closeShift attempt', { action: 'close_shift', code: 'UNAUTHORIZED', tenant_id: profile.tenant_id });
     return { error: 'Hanya Owner atau Manager yang berhak menutup shift.' };
   }
 
@@ -70,7 +92,6 @@ export async function closeShift(formData: FormData) {
   }
 
   try {
-    // Before closing, select cashier details for audit logging
     const { data: shiftRecord } = await supabase
       .from('kasir_shift')
       .select('cashier_name, cashier_id')
@@ -85,10 +106,27 @@ export async function closeShift(formData: FormData) {
     });
 
     if (rpcError) {
-      return { error: `Gagal menutup shift: ${rpcError.message}` };
+      let errMsg = rpcError.message;
+      let code: string | undefined = undefined;
+
+      if (errMsg.includes('Hanya Owner atau Manager')) {
+        code = 'UNAUTHORIZED';
+        errMsg = 'Hanya Owner atau Manager yang berhak menutup shift.';
+      } else if (errMsg.includes('Shift tidak ditemukan atau sudah ditutup')) {
+        code = 'SHIFT_NOT_FOUND_OR_CLOSED';
+        errMsg = 'Shift tidak ditemukan atau sudah ditutup.';
+      }
+
+      if (code) {
+        logger.warn(`closeShift failed: ${errMsg}`, { action: 'close_shift', code, tenant_id: profile.tenant_id });
+      } else {
+        logger.error(rpcError, { action: 'close_shift', tenant_id: profile.tenant_id });
+        errMsg = 'Gagal menutup shift karena kesalahan database.';
+      }
+
+      return { error: errMsg, code };
     }
 
-    // Write audit log entry (fire-and-forget)
     await writeAuditLog(supabase, {
       actor_id: user.id,
       actor_name: profile.full_name || 'Owner/Manager',
@@ -103,7 +141,8 @@ export async function closeShift(formData: FormData) {
     revalidatePath('/dashboard/laporan');
     return { success: true };
   } catch (err: any) {
-    return { error: err.message || 'Terjadi kesalahan tidak terduga.' };
+    logger.error(err, { action: 'close_shift_uncaught', tenant_id: profile?.tenant_id });
+    return { error: 'Terjadi kesalahan internal server saat menutup shift.' };
   }
 }
 
@@ -118,7 +157,10 @@ export async function getActiveShifts() {
     .eq('status', 'open')
     .order('opened_at', { ascending: false });
 
-  if (error) return { error: error.message };
+  if (error) {
+    logger.error(error, { action: 'get_active_shifts', tenant_id: profile.tenant_id });
+    return { error: 'Gagal memuat daftar shift aktif.' };
+  }
   return { data };
 }
 
@@ -138,6 +180,9 @@ export async function getShiftHistory(page: number = 1) {
     .order('opened_at', { ascending: false })
     .range(from, to);
 
-  if (error) return { error: error.message };
+  if (error) {
+    logger.error(error, { action: 'get_shift_history', tenant_id: profile.tenant_id });
+    return { error: 'Gagal memuat riwayat shift.' };
+  }
   return { data, count, pageSize };
 }

@@ -42,4 +42,5 @@ next-env.d.ts
 
 # scratch directory (contains test credentials and scripts)
 /scratch/
+/tests/
 

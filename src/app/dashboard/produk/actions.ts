@@ -3,8 +3,7 @@
 import { getAuthenticatedUser } from '@/utils/supabase/auth';
 import { revalidatePath } from 'next/cache';
 import { randomUUID } from 'crypto';
-import { writeAuditLog } from '@/utils/supabase/audit';
-import { canChangePrice } from '@/utils/permissions';
+import { logger } from '@/lib/logger';
 
 export async function createProduk(formData: FormData) {
   const { profile, supabase } = await getAuthenticatedUser();
@@ -25,20 +24,36 @@ export async function createProduk(formData: FormData) {
     return { error: 'Nama produk wajib diisi.' };
   }
 
-  // Handle Image Upload
+  // Handle Image Upload with Strict Validation
   let gambar_url: string | null = null;
   let uploadedFilePath: string | null = null;
   const imageFile = formData.get('gambar') as File | null;
   if (imageFile && imageFile.size > 0 && imageFile.name) {
+    // 1. Size cap: 2MB
+    if (imageFile.size > 2 * 1024 * 1024) {
+      return { error: 'Ukuran gambar maksimal 2MB.' };
+    }
+
+    // 2. Extension validation
+    const fileExt = imageFile.name.split('.').pop()?.toLowerCase();
+    const allowedExts = ['jpg', 'jpeg', 'png', 'webp'];
+    if (!fileExt || !allowedExts.includes(fileExt)) {
+      return { error: 'Format gambar tidak valid. Hanya JPG, JPEG, PNG, dan WEBP yang diizinkan.' };
+    }
+
+    // 3. MIME mapping (don't trust client-side MIME)
+    let mimeType = 'image/jpeg';
+    if (fileExt === 'png') mimeType = 'image/png';
+    else if (fileExt === 'webp') mimeType = 'image/webp';
+
     try {
-      const fileExt = imageFile.name.split('.').pop();
       const fileName = `${randomUUID()}.${fileExt}`;
-      const filePath = `${fileName}`;
+      const filePath = `${profile.tenant_id}/${fileName}`; // Partitioned by tenant_id
 
       const { error: uploadError } = await supabase.storage
         .from('product-images')
         .upload(filePath, imageFile, {
-          contentType: imageFile.type,
+          contentType: mimeType,
           cacheControl: '3600',
           upsert: false
         });
@@ -59,119 +74,54 @@ export async function createProduk(formData: FormData) {
     }
   }
 
-  let finalKodeProduk = kode_produk?.trim() || '';
+  const finalKodeProduk = kode_produk?.trim() || '';
   const isGenerated = finalKodeProduk === '';
-  let newProduct = null;
-  let insertError = null;
 
-  if (isGenerated) {
-    let retries = 5;
-    while (retries > 0) {
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-      let barcodeStr = '';
-      for (let i = 0; i < 8; i++) {
-        barcodeStr += chars.charAt(Math.floor(Math.random() * chars.length));
-      }
-      finalKodeProduk = `DB-${barcodeStr}`;
-
-      const { data, error } = await supabase
-        .from('produk')
-        .insert({
-          kode_produk: finalKodeProduk,
-          nama,
-          deskripsi: deskripsi || null,
-          harga,
-          harga_modal,
-          stok_saat_ini: stok_awal,
-          gambar_url,
-          is_generated: true
-        })
-        .select()
-        .single();
-
-      if (!error) {
-        newProduct = data;
-        insertError = null;
-        break;
-      }
-
-      insertError = error;
-      const isUniqueViolation = error.code === '23505' || 
-                                error.message?.toLowerCase().includes('unique') || 
-                                error.message?.toLowerCase().includes('duplicate');
-      if (!isUniqueViolation) {
-        break;
-      }
-      retries--;
-    }
-  } else {
-    const { data, error } = await supabase
-      .from('produk')
-      .insert({
-        kode_produk: finalKodeProduk,
-        nama,
-        deskripsi: deskripsi || null,
-        harga,
-        harga_modal,
-        stok_saat_ini: stok_awal,
-        gambar_url,
-        is_generated: false
-      })
-      .select()
-      .single();
-
-    newProduct = data;
-    insertError = error;
-  }
+  // Call the create_produk RPC
+  const { error: insertError } = await supabase.rpc('create_produk', {
+    p_kode_produk: finalKodeProduk,
+    p_nama: nama,
+    p_deskripsi: deskripsi || null,
+    p_harga: harga,
+    p_harga_modal: harga_modal,
+    p_stok_awal: stok_awal,
+    p_gambar_url: gambar_url,
+    p_is_generated: isGenerated
+  });
 
   if (insertError) {
-    // Cleanup orphaned image if database insert fails
+    console.error('createProduk RPC error:', insertError);
+    // Cleanup uploaded image on database failure
     if (uploadedFilePath) {
       await supabase.storage.from('product-images').remove([uploadedFilePath]);
     }
-    if (insertError.message.includes('unique constraint') || insertError.code === '23505') {
-      return { error: 'Kode produk sudah terdaftar.' };
-    }
-    return { error: insertError.message };
-  }
 
-  // If there's an initial stock, log it in stock logs!
-  if (stok_awal > 0 && newProduct) {
-    const { error: logError } = await supabase.from('stok_log').insert({
-      produk_id: newProduct.id,
-      tipe: 'masuk',
-      jumlah: stok_awal,
-      keterangan: 'Stok awal produk baru',
-      dibuat_oleh: profile.id
-    });
+    let errMsg = insertError.message;
+    let code: string | undefined = undefined;
 
-    if (logError) {
-      console.error('Gagal memasukkan stok_log awal:', logError.message);
-      // Rollback: Delete the product and cleanup the uploaded image
-      await supabase.from('produk').delete().eq('id', newProduct.id);
-      if (uploadedFilePath) {
-        await supabase.storage.from('product-images').remove([uploadedFilePath]);
+    if (insertError.code === '23505' || errMsg.includes('unique constraint') || errMsg.includes('produk_tenant_kode_produk_key')) {
+      code = 'KODE_DUPLICATE';
+      errMsg = 'Kode produk sudah terdaftar.';
+    } else if (errMsg.includes(':')) {
+      const parts = errMsg.split(':');
+      const potentialCode = parts[0].trim();
+      if (/^[A-Z0-9_]+$/.test(potentialCode)) {
+        code = potentialCode;
+        errMsg = parts.slice(1).join(':').trim();
       }
-      return { error: `Gagal mencatat stok awal: ${logError.message}` };
     }
-  }
 
-  if (newProduct) {
-    await writeAuditLog(supabase, {
-      actor_id: profile.id,
-      actor_name: profile.full_name || 'Owner',
-      action: 'product_create',
-      target_type: 'produk',
-      target_id: newProduct.id,
-      target_name: nama,
-      detail: {
-        kode_produk: finalKodeProduk,
-        harga,
-        harga_modal,
-        stok_awal,
-      },
-      tenant_id: profile.tenant_id,
-    });
+    if (insertError.code && !code && (errMsg.includes('violates') || errMsg.includes('null value') || errMsg.includes('permission denied') || errMsg.includes('relation'))) {
+      errMsg = 'Gagal menyimpan produk karena kesalahan database.';
+    }
+
+    if (code) {
+      logger.warn(`createProduk failed: ${errMsg}`, { action: 'create_produk', code, tenant_id: profile.tenant_id });
+    } else {
+      logger.error(insertError, { action: 'create_produk', tenant_id: profile.tenant_id });
+    }
+
+    return { error: errMsg, code };
   }
 
   revalidatePath('/dashboard/produk');
@@ -181,8 +131,9 @@ export async function createProduk(formData: FormData) {
 
 export async function updateProduk(id: string, formData: FormData) {
   const { profile, supabase } = await getAuthenticatedUser();
-  if (!profile) return { error: 'Sesi kedaluwarsa.' };
+  if (!profile) return { error: 'Sesi kedaluwarsa. Silakan masuk kembali.' };
 
+  // Fetch current product values to manage old image cleanup
   const { data: currentProduct, error: fetchError } = await supabase
     .from('produk')
     .select('harga, harga_modal, gambar_url')
@@ -202,45 +153,38 @@ export async function updateProduk(id: string, formData: FormData) {
     return { error: 'Nama produk wajib diisi.' };
   }
 
-  const updateData: {
-    nama: string;
-    deskripsi: string | null;
-    harga?: number;
-    harga_modal?: number | null;
-    gambar_url?: string;
-  } = {
-    nama,
-    deskripsi: deskripsi || null
-  };
-
-  if (Number(currentProduct.harga) !== inputHarga) {
-    if (!canChangePrice(profile.role)) {
-      return { error: 'Hanya Owner atau Manager yang dapat mengubah harga produk.' };
-    }
-    updateData.harga = inputHarga;
-  }
-
-  if (inputHargaModal !== null && Number(currentProduct.harga_modal || 0) !== inputHargaModal) {
-    if (profile.role !== 'owner') {
-      return { error: 'Hanya Owner yang dapat mengubah harga modal produk.' };
-    }
-    updateData.harga_modal = inputHargaModal;
-  }
-
+  // Handle Image Upload with Strict Validation
   const imageFile = formData.get('gambar') as File | null;
   let oldImageToDelete: string | null = null;
   let uploadedFilePath: string | null = null;
+  let gambar_url: string | null = null;
 
   if (imageFile && imageFile.size > 0 && imageFile.name) {
+    // 1. Size cap: 2MB
+    if (imageFile.size > 2 * 1024 * 1024) {
+      return { error: 'Ukuran gambar maksimal 2MB.' };
+    }
+
+    // 2. Extension validation
+    const fileExt = imageFile.name.split('.').pop()?.toLowerCase();
+    const allowedExts = ['jpg', 'jpeg', 'png', 'webp'];
+    if (!fileExt || !allowedExts.includes(fileExt)) {
+      return { error: 'Format gambar tidak valid. Hanya JPG, JPEG, PNG, dan WEBP yang diizinkan.' };
+    }
+
+    // 3. MIME mapping (don't trust client-side MIME)
+    let mimeType = 'image/jpeg';
+    if (fileExt === 'png') mimeType = 'image/png';
+    else if (fileExt === 'webp') mimeType = 'image/webp';
+
     try {
-      const fileExt = imageFile.name.split('.').pop();
       const fileName = `${randomUUID()}.${fileExt}`;
-      const filePath = `${fileName}`;
+      const filePath = `${profile.tenant_id}/${fileName}`; // Partitioned by tenant_id
 
       const { error: uploadError } = await supabase.storage
         .from('product-images')
         .upload(filePath, imageFile, {
-          contentType: imageFile.type,
+          contentType: mimeType,
           cacheControl: '3600',
           upsert: false
         });
@@ -254,7 +198,7 @@ export async function updateProduk(id: string, formData: FormData) {
         .from('product-images')
         .getPublicUrl(filePath);
 
-      updateData.gambar_url = urlData.publicUrl;
+      gambar_url = urlData.publicUrl;
 
       if (currentProduct.gambar_url) {
         oldImageToDelete = currentProduct.gambar_url;
@@ -265,54 +209,60 @@ export async function updateProduk(id: string, formData: FormData) {
     }
   }
 
-  const { error: updateError } = await supabase
-    .from('produk')
-    .update(updateData)
-    .eq('id', id);
+  // Call the update_produk RPC (null fields will be COALESCE'd in database)
+  const { error: updateError } = await supabase.rpc('update_produk', {
+    p_id: id,
+    p_nama: nama,
+    p_deskripsi: deskripsi || null,
+    p_harga: inputHarga,
+    p_harga_modal: inputHargaModal,
+    p_gambar_url: gambar_url
+  });
 
   if (updateError) {
-    // Cleanup new uploaded image if database update fails
+    console.error('updateProduk RPC error:', updateError);
+    // Cleanup newly uploaded image if database update fails
     if (uploadedFilePath) {
       await supabase.storage.from('product-images').remove([uploadedFilePath]);
     }
-    return { error: updateError.message };
+
+    let errMsg = updateError.message;
+    let code: string | undefined = undefined;
+
+    if (updateError.code === '23505' || errMsg.includes('unique constraint') || errMsg.includes('produk_tenant_kode_produk_key')) {
+      code = 'KODE_DUPLICATE';
+      errMsg = 'Kode produk sudah terdaftar.';
+    } else if (errMsg.includes(':')) {
+      const parts = errMsg.split(':');
+      const potentialCode = parts[0].trim();
+      if (/^[A-Z0-9_]+$/.test(potentialCode)) {
+        code = potentialCode;
+        errMsg = parts.slice(1).join(':').trim();
+      }
+    }
+
+    if (updateError.code && !code && (errMsg.includes('violates') || errMsg.includes('null value') || errMsg.includes('permission denied') || errMsg.includes('relation'))) {
+      errMsg = 'Gagal memperbarui produk karena kesalahan database.';
+    }
+
+    if (code) {
+      logger.warn(`updateProduk failed: ${errMsg}`, { action: 'update_produk', code, tenant_id: profile.tenant_id });
+    } else {
+      logger.error(updateError, { action: 'update_produk', tenant_id: profile.tenant_id });
+    }
+
+    return { error: errMsg, code };
   }
 
-  // Log price and cost changes separately, only when changed
-  if (updateData.harga !== undefined) {
-    await writeAuditLog(supabase, {
-      actor_id: profile.id,
-      actor_name: profile.full_name || 'Owner',
-      action: 'price_change',
-      target_type: 'produk',
-      target_id: id,
-      target_name: nama,
-      detail: { harga: { old: Number(currentProduct.harga), new: inputHarga } },
-      tenant_id: profile.tenant_id,
-    });
-  }
-
-  if (updateData.harga_modal !== undefined) {
-    await writeAuditLog(supabase, {
-      actor_id: profile.id,
-      actor_name: profile.full_name || 'Owner',
-      action: 'cost_change',
-      target_type: 'produk',
-      target_id: id,
-      target_name: nama,
-      detail: { harga_modal: { old: Number(currentProduct.harga_modal || 0), new: inputHargaModal } },
-      tenant_id: profile.tenant_id,
-    });
-  }
-
+  // Cleanup old image on success
   if (oldImageToDelete) {
     try {
-      const oldPath = oldImageToDelete.split('/').pop();
+      const oldPath = oldImageToDelete.split('/').slice(-2).join('/'); // Get tenant_id/filename
       if (oldPath) {
         await supabase.storage.from('product-images').remove([oldPath]);
       }
     } catch (e) {
-      console.error('Gagal menghapus gambar lama:', e);
+      logger.error(e, { action: 'cleanup_old_product_image', tenant_id: profile.tenant_id });
     }
   }
 
@@ -323,47 +273,43 @@ export async function updateProduk(id: string, formData: FormData) {
 
 export async function deleteProduk(id: string) {
   const { profile, supabase } = await getAuthenticatedUser();
-  if (!profile || profile.role !== 'owner') {
-    return { error: 'Hanya Owner yang berhak menghapus produk.' };
-  }
+  if (!profile) return { error: 'Sesi kedaluwarsa. Silakan masuk kembali.' };
 
-  const { data: product, error: fetchError } = await supabase
-    .from('produk')
-    .select('gambar_url, nama')
-    .eq('id', id)
-    .single();
-
-  if (fetchError || !product) {
-    return { error: 'Produk tidak ditemukan.' };
-  }
-
-  const { error: deleteError } = await supabase
-    .from('produk')
-    .delete()
-    .eq('id', id);
-
-  if (deleteError) {
-    return { error: deleteError.message };
-  }
-
-  // Write audit log entry
-  await writeAuditLog(supabase, {
-    actor_id: profile.id,
-    actor_name: profile.full_name || 'Owner',
-    action: 'product_delete',
-    target_type: 'produk',
-    target_id: id,
-    target_name: product.nama,
-    detail: {
-      nama: product.nama,
-      deleted_at: new Date().toISOString(),
-    },
-    tenant_id: profile.tenant_id,
+  // Call the delete_produk RPC, which will return the image URL to delete from storage
+  const { data: deletedImgUrl, error: deleteError } = await supabase.rpc('delete_produk', {
+    p_id: id
   });
 
-  if (product.gambar_url) {
+  if (deleteError) {
+    let errMsg = deleteError.message;
+    let code: string | undefined = undefined;
+
+    if (errMsg.includes(':')) {
+      const parts = errMsg.split(':');
+      const potentialCode = parts[0].trim();
+      if (/^[A-Z0-9_]+$/.test(potentialCode)) {
+        code = potentialCode;
+        errMsg = parts.slice(1).join(':').trim();
+      }
+    }
+
+    if (deleteError.code && !code && (errMsg.includes('violates') || errMsg.includes('permission denied') || errMsg.includes('relation'))) {
+      errMsg = 'Gagal menghapus produk karena kesalahan database.';
+    }
+
+    if (code) {
+      logger.warn(`deleteProduk failed: ${errMsg}`, { action: 'delete_produk', code, tenant_id: profile.tenant_id });
+    } else {
+      logger.error(deleteError, { action: 'delete_produk', tenant_id: profile.tenant_id });
+    }
+
+    return { error: errMsg, code };
+  }
+
+  // Clean up product image from storage
+  if (deletedImgUrl) {
     try {
-      const fileName = product.gambar_url.split('/').pop();
+      const fileName = deletedImgUrl.split('/').slice(-2).join('/'); // Get tenant_id/filename
       if (fileName) {
         await supabase.storage.from('product-images').remove([fileName]);
       }
@@ -376,3 +322,4 @@ export async function deleteProduk(id: string) {
   revalidatePath('/dashboard');
   return { success: true };
 }
+

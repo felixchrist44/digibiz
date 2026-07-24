@@ -1,5 +1,14 @@
 import { createClient } from '@/utils/supabase/server';
 import { NextResponse } from 'next/server';
+import { getTrustedClientIp, incrementRateLimit } from '@/lib/rate-limit';
+
+function sanitizePostgrestSearch(input: string): string {
+  // Double quoting the value in PostgREST filters protects against grammar injection (, ) . *).
+  // Escape backslashes and double quotes inside the string literal.
+  return input
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
+}
 
 export async function GET(request: Request) {
   try {
@@ -8,6 +17,26 @@ export async function GET(request: Request) {
 
     const supabase = await createClient();
 
+    // Key rate limit by verified header x-user-id if available (from proxy middleware), fallback to IP
+    const headers = request.headers;
+    const xUserId = headers.get('x-user-id');
+    const ip = getTrustedClientIp(headers);
+    const rateLimitKey = xUserId ? `search:user:${xUserId}` : `search:ip:${ip}`;
+
+    // Apply rate limit: 60 requests per 10 seconds (abuse ceiling for fast cashier typing)
+    const limitResult = await incrementRateLimit(supabase, rateLimitKey, 60, 10);
+    if (!limitResult.allowed) {
+      return NextResponse.json(
+        { error: 'Terlalu banyak permintaan search. Silakan tunggu beberapa saat.' },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': '10',
+          },
+        }
+      );
+    }
+
     let dbQuery = supabase
       .from('produk')
       .select('id, nama, kode_produk, harga, stok_saat_ini')
@@ -15,7 +44,8 @@ export async function GET(request: Request) {
       .limit(12);
 
     if (query.trim()) {
-      dbQuery = dbQuery.or(`nama.ilike.%${query.trim()}%,kode_produk.ilike.%${query.trim()}%`);
+      const sanitized = sanitizePostgrestSearch(query.trim());
+      dbQuery = dbQuery.or(`nama.ilike."%${sanitized}%",kode_produk.ilike."%${sanitized}%"`);
     }
 
     const { data, error } = await dbQuery;

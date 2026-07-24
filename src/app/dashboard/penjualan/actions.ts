@@ -2,6 +2,7 @@
 
 import { getAuthenticatedUser } from '@/utils/supabase/auth';
 import { revalidatePath } from 'next/cache';
+import { logger } from '@/lib/logger';
 
 interface CartItem {
   id: string; // product id
@@ -23,7 +24,7 @@ export async function checkoutPenjualan(
   }
 
   // Use cached auth — eliminates getUser() round-trip
-  const { user, supabase } = await getAuthenticatedUser();
+  const { user, profile, supabase } = await getAuthenticatedUser();
   if (!user) return { error: 'Sesi kedaluwarsa. Silakan masuk kembali.' };
 
   // Calculate total price (including tax_amount passed from client)
@@ -57,16 +58,30 @@ export async function checkoutPenjualan(
 
     if (txError) {
       let errMsg = txError.message;
+      let code: string | undefined = undefined;
+
       if (errMsg.includes('SHIFT_REQUIRED')) {
+        code = 'SHIFT_REQUIRED';
         errMsg = 'Penjualan tunai membutuhkan shift kasir yang aktif.';
       } else if (errMsg.includes('SHIFT_INVALID')) {
+        code = 'SHIFT_INVALID';
         errMsg = 'Shift tidak aktif atau bukan milik kasir ini.';
       } else if (errMsg.includes('PRICE_MISMATCH')) {
+        code = 'PRICE_MISMATCH';
         errMsg = 'Harga produk di kasir telah berubah. Silakan klik tombol perbarui harga.';
       } else if (errMsg.includes('TAX_MISMATCH')) {
+        code = 'TAX_MISMATCH';
         errMsg = 'Pengaturan pajak toko telah berubah. Silakan klik tombol perbarui harga.';
+      } else if (errMsg.includes('PRODUK_INVALID')) {
+        code = 'PRODUK_INVALID';
+        errMsg = 'Produk tidak ditemukan atau tidak aktif di tenant ini.';
       }
-      return { error: `Transaksi gagal: ${errMsg}` };
+      if (code) {
+        logger.warn(`Checkout failed: ${errMsg}`, { action: 'checkout', code, tenant_id: profile?.tenant_id });
+      } else {
+        logger.error(txError, { action: 'checkout', tenant_id: profile?.tenant_id });
+      }
+      return { error: `Transaksi gagal: ${errMsg}`, code };
     }
 
     // Fetch authoritative stored truth from the database to align with idempotency-deduplicated retries
@@ -77,7 +92,9 @@ export async function checkoutPenjualan(
       .single();
 
     if (fetchError || !storedSale) {
-      return { error: `Gagal memverifikasi transaksi: ${fetchError?.message || 'Data tidak ditemukan.'}` };
+      const fetchErrMsg = fetchError?.message || 'Data tidak ditemukan.';
+      logger.error(`Failed to verify checkout transaction: ${fetchErrMsg}`, { action: 'checkout_verify', tenant_id: profile?.tenant_id });
+      return { error: `Gagal memverifikasi transaksi: ${fetchErrMsg}` };
     }
 
     revalidatePath('/dashboard/penjualan');
@@ -92,6 +109,7 @@ export async function checkoutPenjualan(
       invoice_id: penjualanId
     };
   } catch (err: any) {
+    logger.error(err, { action: 'checkout_uncaught', tenant_id: profile?.tenant_id });
     return { error: err.message || 'Terjadi kesalahan sistem saat memproses transaksi.' };
   }
 }
@@ -108,20 +126,28 @@ export async function getReceiptSettings() {
       .single();
 
     if (error) {
+      if (error.code === 'PGRST116') {
+        logger.info('No receipt settings found for tenant (using defaults)', { action: 'get_receipt_settings', code: 'PGRST116', tenant_id: profile.tenant_id });
+        return {
+          data: {
+            store_name: 'Toko DigiBiz',
+            store_address: null,
+            receipt_header: null,
+            receipt_footer: null,
+            tax_enabled: false,
+            tax_rate: 0
+          }
+        };
+      }
+      logger.error(error, { action: 'get_receipt_settings', code: error.code, tenant_id: profile.tenant_id });
       return {
-        data: {
-          store_name: 'Toko DigiBiz',
-          store_address: null,
-          receipt_header: null,
-          receipt_footer: null,
-          tax_enabled: false,
-          tax_rate: 0
-        }
+        error: `Gagal mengambil pengaturan struk: ${error.message}`
       };
     }
 
     return { data };
   } catch (err: any) {
+    logger.error(err, { action: 'get_receipt_settings_uncaught', tenant_id: profile?.tenant_id });
     return {
       error: err.message || 'Terjadi kesalahan saat mengambil pengaturan struk.'
     };

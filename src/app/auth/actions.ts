@@ -3,6 +3,8 @@
 import { createClient } from '@/utils/supabase/server';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { headers } from 'next/headers';
+import { getTrustedClientIp, checkRateLimit, incrementRateLimit, resetRateLimit } from '@/lib/rate-limit';
 
 export async function login(prevState: any, formData: FormData) {
   const email = formData.get('email') as string;
@@ -13,6 +15,20 @@ export async function login(prevState: any, formData: FormData) {
   }
 
   const supabase = await createClient();
+  const reqHeaders = await headers();
+  const ip = getTrustedClientIp(reqHeaders);
+  const normalizedEmail = email.trim().toLowerCase();
+
+  const ipKey = `login:ip:${ip}`;
+  const emailKey = `login:email:${normalizedEmail}`;
+
+  // Check rate limits BEFORE authenticating (check-only, does not increment counter)
+  const ipCheck = await checkRateLimit(supabase, ipKey, 20, 900); // 20 attempts per 15 min
+  const emailCheck = await checkRateLimit(supabase, emailKey, 15, 900); // 15 failures per 15 min
+
+  if (!ipCheck.allowed || !emailCheck.allowed) {
+    return { error: 'Terlalu banyak percobaan masuk. Silakan coba lagi beberapa saat lagi.' };
+  }
 
   const { error } = await supabase.auth.signInWithPassword({
     email,
@@ -20,6 +36,10 @@ export async function login(prevState: any, formData: FormData) {
   });
 
   if (error) {
+    // Only increment failure counters on failed authentication attempt
+    await incrementRateLimit(supabase, ipKey, 20, 900);
+    await incrementRateLimit(supabase, emailKey, 15, 900);
+
     // Translate common auth errors to Indonesian for better UX
     let message = error.message;
     if (error.message.includes('Invalid login credentials')) {
@@ -27,6 +47,9 @@ export async function login(prevState: any, formData: FormData) {
     }
     return { error: message };
   }
+
+  // Clear failure counter on successful login so legitimate owners never lock themselves out
+  await resetRateLimit(supabase, emailKey);
 
   revalidatePath('/', 'layout');
   redirect('/dashboard');

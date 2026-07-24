@@ -24,11 +24,13 @@ DECLARE
   v_tanggal DATE;
   v_seq INTEGER;
   v_nomor_invoice TEXT;
+  v_shift_ok BOOLEAN;
   v_subtotal NUMERIC := 0;
   v_tax_amount NUMERIC := 0;
   v_total_harga NUMERIC := 0;
   v_tax_enabled BOOLEAN;
   v_tax_rate NUMERIC;
+  v_effective_tax_enabled BOOLEAN;
 BEGIN
   -- Securely derive tenant from JWT
   v_tenant_id := (auth.jwt() -> 'app_metadata' ->> 'tenant_id')::uuid;
@@ -36,7 +38,7 @@ BEGIN
     RAISE EXCEPTION 'Tenant ID tidak ditemukan di session JWT. Silakan login kembali.';
   END IF;
 
-  -- Idempotency PRE-CHECK: return original sale ID if this is a retried submit
+  -- 1. Idempotency PRE-CHECK: return original sale ID if this is a retried submit
   IF p_idempotency_key IS NOT NULL THEN
     SELECT id INTO v_penjualan_id FROM public.penjualan
     WHERE tenant_id = v_tenant_id AND idempotency_key = p_idempotency_key;
@@ -45,13 +47,13 @@ BEGIN
     END IF;
   END IF;
 
-  -- Cashier Shift Gating for Cash Sales
+  -- 2. Cashier Shift Gating for Cash Sales
   IF p_payment_method = 'cash' THEN
     IF p_shift_id IS NULL THEN
       RAISE EXCEPTION 'SHIFT_REQUIRED: Penjualan tunai membutuhkan shift kasir yang aktif.';
     END IF;
 
-    PERFORM true
+    SELECT true INTO v_shift_ok
     FROM public.kasir_shift
     WHERE id = p_shift_id
       AND tenant_id = v_tenant_id
@@ -63,7 +65,7 @@ BEGIN
     END IF;
   END IF;
 
-  -- Fetch tenant tax configuration
+  -- 3. Fetch tenant tax configuration
   SELECT tax_enabled, tax_rate INTO v_tax_enabled, v_tax_rate
   FROM public.tenant_settings
   WHERE tenant_id = v_tenant_id;
@@ -71,7 +73,7 @@ BEGIN
   v_tax_enabled := COALESCE(v_tax_enabled, false);
   v_tax_rate := COALESCE(v_tax_rate, 0);
 
-  -- Loop 1: Recalculate subtotal and validate product prices server-side
+  -- 4. Loop 1: Recalculate subtotal and validate product prices server-side
   FOR v_item IN
     SELECT * FROM jsonb_to_recordset(p_items) AS x(produk_id UUID, harga_satuan NUMERIC, jumlah INTEGER)
   LOOP
@@ -80,15 +82,16 @@ BEGIN
     FROM public.produk
     WHERE id = v_item.produk_id AND tenant_id = v_tenant_id;
 
-    IF NOT FOUND OR v_harga_jual IS NULL THEN
-      RAISE EXCEPTION 'PRODUK_INVALID: Produk tidak ditemukan atau tidak aktif.';
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'PRODUK_INVALID: Produk tidak ditemukan di tenant ini.';
     END IF;
 
     v_subtotal := v_subtotal + (v_harga_jual * v_item.jumlah);
   END LOOP;
 
-  -- Recalculate tax server-side if tax toggle was active on client and enabled store-wide
-  IF p_tax_enabled AND v_tax_enabled THEN
+  -- 5. Recalculate tax server-side if tax toggle was active on client and enabled store-wide
+  v_effective_tax_enabled := (p_tax_enabled AND v_tax_enabled);
+  IF v_effective_tax_enabled THEN
     v_tax_amount := round(v_subtotal * (v_tax_rate / 100.0));
   ELSE
     v_tax_amount := 0;
@@ -96,19 +99,18 @@ BEGIN
 
   v_total_harga := v_subtotal + v_tax_amount;
 
-  -- Enforce Payment Integrity. Attribute the error precisely so the client
-  -- refresh reloads the right thing: subtotal drift = PRICE (a product's price
-  -- changed), tax drift = TAX (rate/toggle changed). Check subtotal FIRST — a
-  -- price change also moves the total, and we must not mislabel it as a tax error.
+  -- 6. Enforce Payment Integrity checks
+  -- Check subtotal mismatch first to prevent mislabeling price changes as tax changes
   IF (p_total_harga - p_tax_amount) IS DISTINCT FROM v_subtotal THEN
     RAISE EXCEPTION 'PRICE_MISMATCH: Harga produk telah berubah. Silakan perbarui harga.';
   END IF;
 
+  -- Check tax mismatch second
   IF p_tax_amount IS DISTINCT FROM v_tax_amount THEN
     RAISE EXCEPTION 'TAX_MISMATCH: Pengaturan pajak telah berubah. Silakan perbarui harga.';
   END IF;
 
-  -- Derive daily invoice sequence (INV-YYYYMMDD-00001 format, per-tenant, WIB timezone)
+  -- 7. Derive daily invoice sequence (INV-YYYYMMDD-00001 format, per-tenant, WIB timezone)
   v_tanggal := (now() AT TIME ZONE 'Asia/Jakarta')::date;
   INSERT INTO public.invoice_counters (tenant_id, tanggal, last_seq)
   VALUES (v_tenant_id, v_tanggal, 1)
@@ -125,10 +127,10 @@ BEGIN
   )
   VALUES (
     v_penjualan_id, v_tenant_id, v_nomor_invoice, v_total_harga, p_dibuat_oleh,
-    p_payment_method, p_shift_id, v_tax_amount, p_tax_enabled, p_idempotency_key
+    p_payment_method, p_shift_id, v_tax_amount, v_effective_tax_enabled, p_idempotency_key
   );
 
-  -- Loop 2: Insert transaction detail items and record stock movements
+  -- 8. Loop 2: Insert transaction detail items and record stock movements
   FOR v_item IN
     SELECT * FROM jsonb_to_recordset(p_items) AS x(produk_id UUID, harga_satuan NUMERIC, jumlah INTEGER)
   LOOP

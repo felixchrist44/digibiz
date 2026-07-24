@@ -4,6 +4,7 @@ import { getAuthenticatedUser } from '@/utils/supabase/auth';
 import { revalidatePath } from 'next/cache';
 import { writeAuditLog } from '@/utils/supabase/audit';
 import { canManageInventory } from '@/utils/permissions';
+import { logger } from '@/lib/logger';
 
 export async function adjustStok(formData: FormData) {
   // Use cached auth — eliminates getUser() round-trip
@@ -11,6 +12,7 @@ export async function adjustStok(formData: FormData) {
   if (!user || !profile) return { error: 'Sesi kedaluwarsa. Silakan masuk kembali.' };
 
   if (!canManageInventory(profile.role)) {
+    logger.warn('Unauthorized stock adjust attempt', { action: 'adjust_stok', code: 'UNAUTHORIZED', tenant_id: profile.tenant_id });
     return { error: 'Hanya Owner atau Manager yang berhak melakukan penyesuaian stok manual.' };
   }
 
@@ -33,7 +35,31 @@ export async function adjustStok(formData: FormData) {
     });
 
     if (txError) {
-      return { error: `Gagal menyesuaikan stok: ${txError.message}` };
+      let errMsg = txError.message;
+      let code: string | undefined = undefined;
+
+      if (errMsg.includes('Hanya Owner atau Manager')) {
+        code = 'UNAUTHORIZED';
+        errMsg = 'Hanya Owner atau Manager yang berhak melakukan penyesuaian stok manual.';
+      } else if (errMsg.includes('Produk tidak ditemukan')) {
+        code = 'PRODUK_NOT_FOUND';
+        errMsg = 'Produk tidak ditemukan atau bukan milik tenant ini.';
+      } else if (errMsg.includes('Stok tidak mencukupi')) {
+        code = 'INSUFFICIENT_STOCK';
+        errMsg = 'Jumlah penyesuaian keluar melebihi stok saat ini.';
+      } else if (errMsg.includes('Tenant ID tidak ditemukan')) {
+        code = 'UNAUTHENTICATED';
+        errMsg = 'Sesi kedaluwarsa atau Tenant ID tidak ditemukan. Silakan masuk kembali.';
+      }
+
+      if (code) {
+        logger.warn(`Stock adjust failed: ${errMsg}`, { action: 'adjust_stok', code, tenant_id: profile.tenant_id });
+      } else {
+        logger.error(txError, { action: 'adjust_stok', tenant_id: profile.tenant_id });
+        errMsg = 'Gagal menyesuaikan stok karena kesalahan database.';
+      }
+
+      return { error: errMsg, code };
     }
 
     // Fetch product name for target_name in audit log
@@ -65,9 +91,8 @@ export async function adjustStok(formData: FormData) {
     revalidatePath('/dashboard');
 
     return { success: true };
-  } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return { error: errorMessage || 'Terjadi kesalahan sistem saat memproses transaksi.' };
+  } catch (err: any) {
+    logger.error(err, { action: 'adjust_stok_uncaught', tenant_id: profile?.tenant_id });
+    return { error: 'Terjadi kesalahan sistem saat memproses transaksi.' };
   }
 }
-

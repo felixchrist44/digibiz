@@ -21,7 +21,7 @@ interface CartContextType {
   clearCart: () => void;
   handleIncomingBarcode: (sku: string) => Promise<void>;
   sendBarcodeBroadcast: (sku: string) => Promise<string | null>;
-  updateCart: (items: CartItem[]) => void;
+  updateCart: (dbRows: { id: string; harga: number; stok_saat_ini: number }[]) => void;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
@@ -224,8 +224,28 @@ export function CartProvider({
     };
   }, [tenantId, supabase]);
 
-  const updateCart = (items: CartItem[]) => {
-    setCart(items);
+  // Re-sync the cart against fresh DB rows after a server price/tax mismatch.
+  // Merge rules: keep the cashier's chosen quantity, overwrite price + stock
+  // ceiling, cap quantity to available stock, and drop items that were deleted
+  // (not returned by the DB) or are now out of stock.
+  const updateCart = (
+    dbRows: { id: string; harga: number; stok_saat_ini: number }[]
+  ) => {
+    const byId = new Map(dbRows.map(r => [r.id, r]));
+    setCart(prev =>
+      prev.reduce<CartItem[]>((acc, item) => {
+        const row = byId.get(item.id);
+        if (!row || row.stok_saat_ini <= 0) return acc; // deleted or out of stock -> drop
+        const maxStok = row.stok_saat_ini;
+        acc.push({
+          ...item,
+          harga: Number(row.harga),
+          maxStok,
+          jumlah: Math.min(item.jumlah, maxStok), // cap to available stock
+        });
+        return acc;
+      }, [])
+    );
   };
 
   return (

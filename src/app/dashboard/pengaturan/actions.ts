@@ -6,6 +6,7 @@ import { canManageSettings } from '@/utils/permissions';
 import { writeAuditLog } from '@/utils/supabase/audit';
 import { revalidatePath } from 'next/cache';
 import { TenantSettings } from '@/types/database';
+import { logger } from '@/lib/logger';
 
 export async function getSettings(): Promise<TenantSettings> {
   const { profile, supabase } = await getAuthenticatedUser();
@@ -31,7 +32,16 @@ export async function getSettings(): Promise<TenantSettings> {
     updated_at: new Date().toISOString(),
   };
 
-  if (error || !data) {
+  if (error) {
+    if (error.code === 'PGRST116') {
+      logger.info('No tenant settings found (using default values)', { action: 'get_settings', code: 'PGRST116', tenant_id: profile.tenant_id });
+      return defaultSettings;
+    }
+    logger.error(error, { action: 'get_settings', code: error.code, tenant_id: profile.tenant_id });
+    throw new Error(`Gagal mengambil pengaturan toko: ${error.message}`);
+  }
+
+  if (!data) {
     return defaultSettings;
   }
 
@@ -46,6 +56,7 @@ export async function updateSettings(formData: FormData) {
     const { profile, supabase } = await getAuthenticatedUser();
 
     if (!profile || !canManageSettings(profile.role)) {
+      logger.warn('Unauthorized settings update attempt', { action: 'update_settings', code: 'UNAUTHORIZED', tenant_id: profile?.tenant_id });
       return { error: 'Hanya Owner yang berhak mengubah pengaturan toko.' };
     }
 
@@ -91,10 +102,11 @@ export async function updateSettings(formData: FormData) {
       .upsert(updatedSettings, { onConflict: 'tenant_id' });
 
     if (upsertError) {
-      return { error: `Gagal memperbarui pengaturan: ${upsertError.message}` };
+      logger.error(upsertError, { action: 'update_settings', tenant_id: profile.tenant_id });
+      return { error: 'Gagal memperbarui pengaturan toko karena kesalahan database.' };
     }
 
-    // Write audit log if oldSettings exists (which it should due to backfill/owner creation)
+    // Write audit log if oldSettings exists
     if (oldSettings) {
       const editedFields: string[] = [];
       const detail: Record<string, any> = {};
@@ -114,7 +126,6 @@ export async function updateSettings(formData: FormData) {
 
       if (editedFields.length > 0) {
         detail.fields = editedFields;
-        // Fire and forget
         writeAuditLog(supabase, {
           actor_id: profile.id,
           actor_name: profile.full_name || 'Owner',
@@ -124,13 +135,14 @@ export async function updateSettings(formData: FormData) {
           target_name: updatedSettings.store_name,
           detail,
           tenant_id: profile.tenant_id,
-        }).catch((err) => console.error('Failed to dispatch audit log:', err));
+        }).catch((err) => logger.error(err, { action: 'settings_update_audit_log' }));
       }
     }
 
     revalidatePath('/dashboard/pengaturan');
     return { success: true };
   } catch (err: any) {
-    return { error: err.message || 'Terjadi kesalahan internal server.' };
+    logger.error(err, { action: 'update_settings_uncaught' });
+    return { error: 'Terjadi kesalahan internal server saat menyimpan pengaturan.' };
   }
 }

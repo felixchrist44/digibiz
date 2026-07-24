@@ -22,7 +22,24 @@ export async function nullifyPenjualanAction(penjualanId: string) {
     });
 
     if (rpcError) {
-      return { error: `Gagal membatalkan transaksi: ${rpcError.message}` };
+      console.error('nullifyPenjualanAction RPC error:', rpcError);
+      let errMsg = rpcError.message;
+      let code: string | undefined = undefined;
+
+      if (errMsg.includes('Hanya Owner atau Manager')) {
+        code = 'UNAUTHORIZED';
+        errMsg = 'Hanya Owner atau Manager yang berhak membatalkan transaksi.';
+      } else if (errMsg.includes('Transaksi tidak ditemukan')) {
+        code = 'SALE_NOT_FOUND';
+        errMsg = 'Transaksi tidak ditemukan atau bukan milik toko ini.';
+      } else if (errMsg.includes('Tenant ID tidak ditemukan')) {
+        code = 'UNAUTHENTICATED';
+        errMsg = 'Sesi kedaluwarsa atau Tenant ID tidak ditemukan. Silakan masuk kembali.';
+      } else {
+        errMsg = 'Gagal membatalkan transaksi karena kesalahan database.';
+      }
+
+      return { error: errMsg, code };
     }
 
     if (!data) {
@@ -63,7 +80,7 @@ export async function nullifyPenjualanAction(penjualanId: string) {
       total_harga: Number(total_harga)
     };
   } catch (err: any) {
-    console.error('Error in nullifyPenjualanAction:', err);
-    return { error: err.message || 'Terjadi kesalahan sistem saat membatalkan transaksi.' };
+    console.error('Error in nullifyPenjualanAction system:', err);
+    return { error: 'Terjadi kesalahan sistem saat membatalkan transaksi.' };
   }
 }

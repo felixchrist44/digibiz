@@ -19,7 +19,8 @@ import {
   History,
   Info,
   ArrowRight,
-  Wifi
+  Wifi,
+  AlertCircle
 } from 'lucide-react';
 import { Produk, Penjualan, DetailPenjualan, Profile } from '@/types/database';
 import { useCart, CartItem } from '@/components/CartProvider';
@@ -90,6 +91,8 @@ export default function PenjualanClient({
     tax_rate: 0
   });
 
+  const [settingsError, setSettingsError] = useState<boolean>(true); // Start disabled to prevent checkout before settings load
+
   const [taxToggled, setTaxToggled] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     try {
@@ -150,8 +153,14 @@ export default function PenjualanClient({
   // Fetch receipt settings once on mount
   useEffect(() => {
     getReceiptSettings().then(s => {
-      if (s && s.data) {
-        setReceiptSettings(s.data);
+      if (s) {
+        if (s.error) {
+          setErrorMsg(s.error);
+          setSettingsError(true);
+        } else if (s.data) {
+          setReceiptSettings(s.data);
+          setSettingsError(false);
+        }
       }
     });
   }, []);
@@ -163,9 +172,12 @@ export default function PenjualanClient({
     } catch {}
   }, [taxToggled]);
 
+  const [showPriceMismatchBanner, setShowPriceMismatchBanner] = useState(false);
+
   // Reset idempotency key when cart content changes
   useEffect(() => {
     checkoutIdempotencyKeyRef.current = null;
+    setShowPriceMismatchBanner(false);
   }, [cart]);
 
   // Modals state
@@ -205,45 +217,42 @@ export default function PenjualanClient({
 
   const refreshPricesAndSettings = async () => {
     setErrorMsg(null);
+    setSettingsError(true);
     try {
       // 1. Fetch latest receipt settings to refresh tax rules
       const settingsRes = await getReceiptSettings();
+      if (settingsRes && settingsRes.error) {
+        setErrorMsg(settingsRes.error);
+        setSettingsError(true);
+        return;
+      }
       if (settingsRes && settingsRes.data) {
         setReceiptSettings(settingsRes.data);
+        setSettingsError(false);
       }
 
       // 2. Fetch latest prices and stock levels for cart items directly from Supabase
       if (cart.length > 0) {
         const { data: latestProducts, error } = await supabase
           .from('produk')
-          .select('id, harga, stok_saat_ini')
+          .select('id, nama, harga, stok_saat_ini')
           .in('id', cart.map(item => item.id));
 
-        if (!error && latestProducts) {
-          const updatedCart = cart
-            .map(item => {
-              const fresh = latestProducts.find(p => p.id === item.id);
-              if (!fresh || fresh.stok_saat_ini === 0) {
-                // Drop vanished or completely out-of-stock items
-                return null;
-              }
-              const newMaxStok = fresh.stok_saat_ini;
-              // Cap jumlah if it exceeds new maximum stock
-              const newJumlah = Math.min(item.jumlah, newMaxStok);
-              return {
-                ...item,
-                harga: Number(fresh.harga),
-                maxStok: newMaxStok,
-                jumlah: newJumlah
-              };
-            })
-            .filter((item): item is CartItem => item !== null);
+        if (error) {
+          setErrorMsg(`Gagal memuat ulang harga produk: ${error.message}`);
+          return;
+        }
 
-          updateCart(updatedCart);
+        if (latestProducts) {
+          // Provider applies the merge rules (keep qty, overwrite price/stock,
+          // cap to stock, drop deleted/out-of-stock). Cart change auto-resets
+          // the idempotency key via the [cart] effect, so the retry is a new sale.
+          updateCart(latestProducts);
         }
       }
     } catch (err) {
       console.error('Gagal memperbarui harga dan pengaturan:', err);
+      setErrorMsg(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -291,6 +300,15 @@ export default function PenjualanClient({
 
       if (res?.error) {
         setErrorMsg(res.error);
+        const code = (res as { code?: string }).code;
+        // Price/tax drift or a vanished product: re-sync the cart to server truth
+        // automatically, then wait for the cashier to review and check out again.
+        // We never auto-resubmit — the basket/total may have changed.
+        if (code === 'PRICE_MISMATCH' || code === 'TAX_MISMATCH' || code === 'PRODUK_INVALID') {
+          await refreshPricesAndSettings();
+          setShowPriceMismatchBanner(true);
+          checkoutIdempotencyKeyRef.current = crypto.randomUUID();
+        }
       } else if (res?.success) {
         // Clear key on success
         checkoutIdempotencyKeyRef.current = null;
@@ -627,8 +645,21 @@ export default function PenjualanClient({
                   </div>
                 )}
 
+                {/* Price/Tax Mismatch Warning Banner */}
+                {showPriceMismatchBanner && (
+                  <div className="p-3.5 bg-amber-950/30 border border-amber-900/40 rounded-xl text-xs text-amber-400 space-y-1.5">
+                    <div className="font-bold flex items-center gap-1.5 uppercase tracking-wide">
+                      <AlertCircle className="h-4 w-4 shrink-0 text-amber-400" />
+                      Perbarui Harga & Pajak
+                    </div>
+                    <div className="text-[11px] leading-relaxed opacity-90">
+                      Harga produk atau pengaturan pajak di kasir telah berubah dan diselaraskan ke versi terbaru server. Silakan tinjau kembali total belanja Anda, lalu klik Bayar untuk melanjutkan transaksi.
+                    </div>
+                  </div>
+                )}
+
                 {/* Checkout error message */}
-                {errorMsg && (
+                {errorMsg && !showPriceMismatchBanner && (
                   <div className="p-3 bg-red-950/40 border border-red-900/50 rounded-xl text-xs text-red-400 space-y-2">
                     <div>{errorMsg}</div>
                     {(errorMsg.includes('harga') || errorMsg.includes('pajak') || errorMsg.includes('MISMATCH')) && (
@@ -646,7 +677,7 @@ export default function PenjualanClient({
                 {/* Submit button */}
                 <button
                   onClick={handleCheckout}
-                  disabled={isPending || cart.length === 0 || !isCashSufficient}
+                  disabled={isPending || cart.length === 0 || !isCashSufficient || settingsError}
                   className="w-full flex items-center justify-center gap-2 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Bayar & Selesaikan Transaksi
