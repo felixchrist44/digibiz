@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { createClient } from '@/utils/supabase/client';
 import { Produk } from '@/types/database';
+import { getCachedProductBySku } from '@/lib/offline-db';
 
 export interface CartItem {
   id: string;
@@ -115,12 +116,27 @@ export function CartProvider({
     } catch {}
   };
 
-  // Centralized barcode lookup directly querying PostgreSQL
+  // Centralized barcode lookup with offline IndexedDB fallback
   const handleIncomingBarcode = async (sku: string) => {
     if (!sku) return;
     const trimmedSku = sku.trim();
 
     try {
+      if (typeof window !== 'undefined' && !navigator.onLine) {
+        const cached = await getCachedProductBySku(trimmedSku);
+        if (cached) {
+          addToCart({
+            id: cached.id,
+            kode_produk: cached.kode_produk,
+            nama: cached.nama,
+            harga: cached.harga,
+            stok_saat_ini: cached.stok_saat_ini,
+            created_at: cached.updated_at
+          } as unknown as Produk);
+          return;
+        }
+      }
+
       const { data, error } = await supabase
         .from('produk')
         .select('id, nama, kode_produk, harga, stok_saat_ini')
@@ -128,14 +144,37 @@ export function CartProvider({
         .maybeSingle();
 
       if (error) {
-        console.error('Error querying product by SKU:', error);
+        console.error('Error querying product by SKU online, trying offline cache:', error);
+        const cached = await getCachedProductBySku(trimmedSku);
+        if (cached) {
+          addToCart({
+            id: cached.id,
+            kode_produk: cached.kode_produk,
+            nama: cached.nama,
+            harga: cached.harga,
+            stok_saat_ini: cached.stok_saat_ini,
+            created_at: cached.updated_at
+          } as unknown as Produk);
+          return;
+        }
       } else if (data) {
         addToCart(data as Produk);
       } else {
         console.warn(`Produk dengan SKU/Kode "${trimmedSku}" tidak ditemukan.`);
       }
     } catch (err) {
-      console.error('Error during product lookup:', err);
+      console.error('Error during product lookup, trying offline cache:', err);
+      const cached = await getCachedProductBySku(trimmedSku);
+      if (cached) {
+        addToCart({
+          id: cached.id,
+          kode_produk: cached.kode_produk,
+          nama: cached.nama,
+          harga: cached.harga,
+          stok_saat_ini: cached.stok_saat_ini,
+          created_at: cached.updated_at
+        } as unknown as Produk);
+      }
     }
   };
 

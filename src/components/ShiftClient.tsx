@@ -20,6 +20,7 @@ import {
 import { Profile } from '@/types/database';
 import { canManageShifts } from '@/utils/permissions';
 import { openShift, closeShift, getActiveShifts, getShiftHistory } from '@/app/dashboard/shift/actions';
+import { getUnsyncedCountForShift } from '@/lib/offline-db';
 
 interface Props {
   profile: Profile;
@@ -214,12 +215,26 @@ export default function ShiftClient({ profile, initialProfiles }: Props) {
     });
   };
 
-  // Close shift handler
-  const handleCloseShift = (e: React.FormEvent) => {
+  // Close shift handler with offline sales gating
+  const handleCloseShift = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedShift) return;
 
     setErrorMsg(null);
+
+    // Shift-close gating: block close if unsynced offline sales exist on this shift
+    try {
+      const unsyncedCount = await getUnsyncedCountForShift(selectedShift.id);
+      if (unsyncedCount > 0) {
+        setErrorMsg(
+          `Masih ada ${unsyncedCount} transaksi offline yang belum tersinkronisasi pada shift ini. Pastikan koneksi internet tersedia dan semua transaksi telah tersinkronisasi sebelum menutup shift.`
+        );
+        return;
+      }
+    } catch (err) {
+      console.warn('Gagal memeriksa transaksi offline tertunda saat penutupan shift:', err);
+    }
+
     const fd = new FormData();
     fd.append('shift_id', selectedShift.id);
     fd.append('closing_cash', closeClosingCash);

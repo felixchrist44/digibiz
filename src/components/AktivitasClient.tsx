@@ -15,7 +15,9 @@ import {
   XCircle,
   Settings,
   LogIn,
-  LogOut
+  LogOut,
+  AlertTriangle,
+  CheckCircle2
 } from 'lucide-react';
 
 interface AuditEntry {
@@ -40,16 +42,18 @@ const ACTION_META: Record<
   string,
   { label: string; icon: React.ElementType; cls: string }
 > = {
-  product_create: { label: 'Produk Dibuat', icon: PlusCircle, cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
-  product_delete: { label: 'Produk Dihapus', icon: Trash2, cls: 'bg-red-500/10 text-red-400 border-red-500/20' },
-  price_change:   { label: 'Ubah Harga', icon: Tag, cls: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
-  cost_change:    { label: 'Ubah Modal', icon: Coins, cls: 'bg-orange-500/10 text-orange-400 border-orange-500/20' },
-  stock_adjust:   { label: 'Penyesuaian Stok', icon: Boxes, cls: 'bg-blue-500/10 text-blue-400 border-blue-500/20' },
-  role_change:    { label: 'Ubah Peran', icon: UserCog, cls: 'bg-purple-500/10 text-purple-400 border-purple-500/20' },
-  sale_nullify:   { label: 'Transaksi Dibatalkan', icon: XCircle, cls: 'bg-red-500/10 text-red-400 border-red-500/20' },
-  settings_update: { label: 'Pengaturan Diperbarui', icon: Settings, cls: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' },
-  shift_open:     { label: 'Shift Buka', icon: LogIn, cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
-  shift_close:    { label: 'Shift Tutup', icon: LogOut, cls: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
+  product_create:         { label: 'Produk Dibuat', icon: PlusCircle, cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
+  product_delete:         { label: 'Produk Dihapus', icon: Trash2, cls: 'bg-red-500/10 text-red-400 border-red-500/20' },
+  price_change:           { label: 'Ubah Harga', icon: Tag, cls: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
+  cost_change:            { label: 'Ubah Modal', icon: Coins, cls: 'bg-orange-500/10 text-orange-400 border-orange-500/20' },
+  stock_adjust:           { label: 'Penyesuaian Stok', icon: Boxes, cls: 'bg-blue-500/10 text-blue-400 border-blue-500/20' },
+  role_change:            { label: 'Ubah Peran', icon: UserCog, cls: 'bg-purple-500/10 text-purple-400 border-purple-500/20' },
+  sale_nullify:           { label: 'Transaksi Dibatalkan', icon: XCircle, cls: 'bg-red-500/10 text-red-400 border-red-500/20' },
+  settings_update:        { label: 'Pengaturan Diperbarui', icon: Settings, cls: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' },
+  shift_open:             { label: 'Shift Buka', icon: LogIn, cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
+  shift_close:            { label: 'Shift Tutup', icon: LogOut, cls: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
+  sale_offline_variance:  { label: 'Selisih Harga Offline', icon: AlertTriangle, cls: 'bg-amber-500/10 text-amber-400 border-amber-500/20' },
+  price_variance_approve: { label: 'Persetujuan Selisih', icon: CheckCircle2, cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' },
 };
 
 const FILTERS: { value: string | null; label: string }[] = [
@@ -64,6 +68,8 @@ const FILTERS: { value: string | null; label: string }[] = [
   { value: 'settings_update', label: 'Pengaturan Struk' },
   { value: 'shift_open', label: 'Shift Buka' },
   { value: 'shift_close', label: 'Shift Tutup' },
+  { value: 'sale_offline_variance', label: 'Selisih Offline' },
+  { value: 'price_variance_approve', label: 'Persetujuan Selisih' },
 ];
 
 const formatIDR = (v: number) =>
@@ -112,6 +118,13 @@ function describeDetail(entry: AuditEntry): string {
       }
       return parts.join(' • ');
     }
+    case 'sale_offline_variance':
+      if (d.charged_subtotal != null && d.server_subtotal != null) {
+        return `Kasir: ${formatIDR(Number(d.charged_subtotal))} • Server: ${formatIDR(Number(d.server_subtotal))} • Selisih: ${formatIDR(Number(d.variance ?? 0))}`;
+      }
+      return 'Transaksi offline dicatat dengan selisih harga';
+    case 'price_variance_approve':
+      return `Invoice ${entry.target_name ?? ''} disetujui ${d.self_approved ? '(Self-approved)' : ''}`;
     default:
       return '';
   }
@@ -152,7 +165,7 @@ export default function AktivitasClient({
           Riwayat Aktivitas
         </h1>
         <p className="text-xs text-slate-400 mt-1">
-          Catatan permanen setiap perubahan penting: harga, modal, stok, produk, peran pengguna, dan pembatalan transaksi (Hanya Akses Owner).
+          Catatan permanen setiap perubahan penting: harga, modal, stok, produk, peran pengguna, selisih offline, dan persetujuan (Hanya Akses Owner).
         </p>
       </div>
 

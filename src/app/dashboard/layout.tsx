@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import { getAuthenticatedUser } from '@/utils/supabase/auth';
 import { CartProvider } from '@/components/CartProvider';
+import { SyncProvider } from '@/components/SyncProvider';
 import { UserRole } from '@/types/database';
 
 export default async function DashboardLayout({
@@ -25,9 +26,11 @@ export default async function DashboardLayout({
 
   return (
     <Sidebar user={userData}>
-      <CartProvider tenantId={profile?.tenant_id}>
-        {children}
-      </CartProvider>
+      <SyncProvider>
+        <CartProvider tenantId={profile?.tenant_id}>
+          {children}
+        </CartProvider>
+      </SyncProvider>
     </Sidebar>
   );
 }

@@ -7,6 +7,14 @@ import { checkoutPenjualan, getReceiptSettings } from '@/app/dashboard/penjualan
 import ReceiptDocument from '@/components/ReceiptDocument';
 import { getActiveShifts } from '@/app/dashboard/shift/actions';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
+import { useSyncManager } from '@/components/SyncProvider';
+import {
+  queueOfflineSale,
+  markSynced,
+  markRejected,
+  cacheProducts,
+  searchCachedProducts
+} from '@/lib/offline-db';
 import {
   Search,
   ShoppingCart,
@@ -20,7 +28,10 @@ import {
   Info,
   ArrowRight,
   Wifi,
-  AlertCircle
+  WifiOff,
+  AlertCircle,
+  AlertTriangle,
+  RefreshCw
 } from 'lucide-react';
 import { Produk, Penjualan, DetailPenjualan, Profile } from '@/types/database';
 import { useCart, CartItem } from '@/components/CartProvider';
@@ -44,6 +55,7 @@ interface SuccessInvoice {
   change: number;
   payment_method: 'cash' | 'qris';
   created_at: string;
+  is_offline?: boolean;
 }
 export default function PenjualanClient({
   products: initialProducts,
@@ -109,19 +121,50 @@ export default function PenjualanClient({
     setInvoices(initialInvoices);
   }
 
-  // Autocomplete search execution from API endpoint (debounced)
+  const { isOnline, pendingCount, isSyncing, triggerManualSync } = useSyncManager();
+
+  // Seed product catalog into IndexedDB for offline access
   useEffect(() => {
-    if (!search.trim()) return;
+    if (initialProducts && initialProducts.length > 0) {
+      cacheProducts(
+        initialProducts.map(p => ({
+          id: p.id,
+          kode_produk: p.kode_produk,
+          nama: p.nama,
+          harga: Number(p.harga),
+          stok_saat_ini: p.stok_saat_ini,
+          updated_at: p.created_at || new Date().toISOString()
+        }))
+      );
+    }
+  }, [initialProducts]);
+
+  // Autocomplete search execution with offline IndexedDB fallback (debounced)
+  useEffect(() => {
+    if (!search.trim()) {
+      setSearchResults(null);
+      return;
+    }
 
     const delayDebounceFn = setTimeout(async () => {
       try {
+        if (typeof window !== 'undefined' && !navigator.onLine) {
+          const cached = await searchCachedProducts(search);
+          setSearchResults(cached as any);
+          return;
+        }
         const res = await fetch(`/api/produk/search?q=${encodeURIComponent(search)}`);
         if (res.ok) {
           const data = await res.json();
           setSearchResults(data);
+        } else {
+          const cached = await searchCachedProducts(search);
+          setSearchResults(cached as any);
         }
       } catch (err) {
-        console.error('Error fetching search results:', err);
+        console.error('Error fetching search results, using offline cache:', err);
+        const cached = await searchCachedProducts(search);
+        setSearchResults(cached as any);
       }
     }, 250);
 
@@ -277,57 +320,150 @@ export default function PenjualanClient({
     }).format(value);
   };
 
-  // Checkout submit
+  // UNCONDITIONAL ENQUEUE RULE:
+  // 1. Generate idempotency key (UUID v4) — ONCE, never again for this sale.
+  // 2. Build offline_invoice_number = "OFFLINE-" + key.slice(0,8).
+  // 3. Write to IndexedDB outbox as status: 'pending' — BEFORE any network call.
+  // 4. Check isOnline:
+  //    - If isOnline === false → skip straight to offline receipt. The sale is
+  //      already in the outbox; the sync engine will handle it. Do NOT fire a
+  //      network call that will hang until timeout while the cashier and
+  //      customer wait.
+  //    - If isOnline === true → attempt immediate checkout with p_is_offline: false,
+  //      using the STORED key:
+  //        - Success → mark outbox 'synced', show receipt with server invoice number.
+  //        - Business rejection (PRICE_MISMATCH etc.) → mark outbox 'rejected',
+  //          show error to cashier for correction. This is the ONLY place 'rejected' is set.
+  //        - Network failure → leave outbox 'pending', show receipt with
+  //          "Offline (Menunggu Sync)" badge using client_created_at timestamp.
+  //          Sync engine will retry with the STORED key and p_is_offline: true.
+  //
+  // WHY: If we only enqueue on failure, the lost-response case creates duplicates.
+  // Server commits sale under key A, response is lost, client generates key B,
+  // sync creates a second sale. The outbox with key A is the only dedup guard.
+  //
+  // WHY skip when known-offline: The enqueue already happened (rule preserved).
+  // Firing the request anyway just adds seconds of timeout delay before the
+  // cashier sees the offline receipt. The unconditional-enqueue rule is about
+  // the WRITE, not the network attempt.
   const handleCheckout = () => {
     if (cart.length === 0) return;
     setErrorMsg(null);
 
-    // Initialize checkout idempotency key once per checkout attempt sequence
+    // Initialize checkout idempotency key ONCE per checkout attempt sequence
     if (!checkoutIdempotencyKeyRef.current) {
       checkoutIdempotencyKeyRef.current = crypto.randomUUID();
     }
     const idempotencyKey = checkoutIdempotencyKeyRef.current;
+    const offlineInvoiceNumber = 'OFFLINE-' + idempotencyKey.slice(0, 8);
+    const clientCreatedAt = new Date().toISOString();
 
     startTransition(async () => {
-      const res = await checkoutPenjualan(
-        cart,
-        paymentMethod,
-        activeShiftId,
-        tax_amount,
-        taxApplied,
-        idempotencyKey
-      );
+      // Step 3: Write to IndexedDB outbox as 'pending' BEFORE network call
+      try {
+        await queueOfflineSale({
+          idempotency_key: idempotencyKey,
+          items: cart.map(i => ({ produk_id: i.id, nama: i.nama, harga_satuan: i.harga, jumlah: i.jumlah })),
+          total_harga: totalBayar,
+          tax_amount: tax_amount,
+          tax_enabled: taxApplied,
+          payment_method: paymentMethod,
+          shift_id: activeShiftId,
+          dibuat_oleh: profile?.id || '',
+          client_created_at: clientCreatedAt,
+          offline_invoice_number: offlineInvoiceNumber,
+          created_at: clientCreatedAt
+        });
+      } catch (enqueueErr) {
+        console.warn('Writing to outbox before network call failed:', enqueueErr);
+      }
 
-      if (res?.error) {
-        setErrorMsg(res.error);
-        const code = (res as { code?: string }).code;
-        // Price/tax drift or a vanished product: re-sync the cart to server truth
-        // automatically, then wait for the cashier to review and check out again.
-        // We never auto-resubmit — the basket/total may have changed.
-        if (code === 'PRICE_MISMATCH' || code === 'TAX_MISMATCH' || code === 'PRODUK_INVALID') {
-          await refreshPricesAndSettings();
-          setShowPriceMismatchBanner(true);
-          checkoutIdempotencyKeyRef.current = crypto.randomUUID();
-        }
-      } else if (res?.success) {
-        // Clear key on success
+      // Step 4: Known-offline skip logic
+      if (!isOnline) {
         checkoutIdempotencyKeyRef.current = null;
         setSuccessInvoice({
-          nomor_invoice: res.nomor_invoice,
+          nomor_invoice: offlineInvoiceNumber,
           items: [...cart],
           subtotal,
           tax_amount,
           total: totalBayar,
-          total_harga: res.total_harga,
+          total_harga: totalBayar,
           cash: paymentMethod === 'qris' ? totalBayar : cashNum,
           change: paymentMethod === 'qris' ? 0 : cashNum - totalBayar,
           payment_method: paymentMethod,
-          created_at: new Date().toISOString()
+          created_at: clientCreatedAt,
+          is_offline: true
+        });
+        clearCart();
+        setCashReceived('');
+        return;
+      }
+
+      // Step 4 (online branch): Immediate attempt with p_is_offline: false using STORED key
+      try {
+        const res = await checkoutPenjualan(
+          cart,
+          paymentMethod,
+          activeShiftId,
+          tax_amount,
+          taxApplied,
+          idempotencyKey,
+          false,
+          clientCreatedAt
+        );
+
+        if (res?.error) {
+          const code = (res as { code?: string }).code || 'BUSINESS_REJECTION';
+          // OWNERSHIP RULE: markRejected is ONLY called here on immediate business rejections
+          await markRejected(idempotencyKey, res.error, code);
+          setErrorMsg(res.error);
+
+          if (code === 'PRICE_MISMATCH' || code === 'TAX_MISMATCH' || code === 'PRODUK_INVALID') {
+            await refreshPricesAndSettings();
+            setShowPriceMismatchBanner(true);
+            checkoutIdempotencyKeyRef.current = crypto.randomUUID();
+          }
+        } else if (res?.success) {
+          await markSynced(idempotencyKey, res.invoice_id, res.nomor_invoice);
+          checkoutIdempotencyKeyRef.current = null;
+          setSuccessInvoice({
+            nomor_invoice: res.nomor_invoice,
+            items: [...cart],
+            subtotal,
+            tax_amount,
+            total: totalBayar,
+            total_harga: res.total_harga,
+            cash: paymentMethod === 'qris' ? totalBayar : cashNum,
+            change: paymentMethod === 'qris' ? 0 : cashNum - totalBayar,
+            payment_method: paymentMethod,
+            created_at: new Date().toISOString(),
+            is_offline: false
+          });
+
+          clearCart();
+          setCashReceived('');
+          router.refresh();
+        }
+      } catch (netErr: any) {
+        // Network exception on immediate attempt: leave outbox as 'pending' for sync engine
+        console.warn('Network exception during immediate checkout, offline outbox retained:', netErr);
+        checkoutIdempotencyKeyRef.current = null;
+        setSuccessInvoice({
+          nomor_invoice: offlineInvoiceNumber,
+          items: [...cart],
+          subtotal,
+          tax_amount,
+          total: totalBayar,
+          total_harga: totalBayar,
+          cash: paymentMethod === 'qris' ? totalBayar : cashNum,
+          change: paymentMethod === 'qris' ? 0 : cashNum - totalBayar,
+          payment_method: paymentMethod,
+          created_at: clientCreatedAt,
+          is_offline: true
         });
 
         clearCart();
         setCashReceived('');
-        router.refresh();
       }
     });
   };
@@ -354,11 +490,55 @@ export default function PenjualanClient({
 
   return (
     <div className="space-y-6">
-      {/* Tab Navigation */}
+      {/* 50+ Pending Sales Warning Banner */}
+      {pendingCount >= 50 && (
+        <div className="bg-red-950/50 border border-red-500/50 rounded-2xl p-4 flex items-center justify-between gap-4 text-red-200">
+          <div className="flex items-center gap-3">
+            <AlertTriangle className="h-5 w-5 text-red-400 shrink-0" />
+            <div>
+              <p className="text-sm font-bold">Peringatan Transaksi Offline Penumpukan!</p>
+              <p className="text-xs text-red-300">
+                Anda memiliki <strong>{pendingCount}</strong> transaksi offline tertunda. Pastikan koneksi internet tersedia untuk menyelaraskan transaksi.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => triggerManualSync()}
+            className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shrink-0 transition-colors"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Sync Sekarang
+          </button>
+        </div>
+      )}
+
+      {/* Tab Navigation & Status Header */}
       <div className="flex items-center justify-between border-b border-slate-800 pb-3 gap-4 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Kelola Penjualan</h1>
-          <p className="text-xs text-slate-400 mt-1">Catat transaksi kasir dan pantau riwayat penjualan toko.</p>
+        <div className="flex items-center gap-3">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-white">Kelola Penjualan</h1>
+            <p className="text-xs text-slate-400 mt-1">Catat transaksi kasir dan pantau riwayat penjualan toko.</p>
+          </div>
+
+          {/* Network Status Badge */}
+          <div className="ml-2">
+            {isSyncing ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-950/60 border border-amber-500/40 text-amber-300">
+                <RefreshCw className="h-3 w-3 animate-spin text-amber-400" />
+                Menyelaraskan ({pendingCount})
+              </span>
+            ) : isOnline ? (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-950/60 border border-emerald-500/40 text-emerald-300">
+                <Wifi className="h-3 w-3 text-emerald-400" />
+                Online {pendingCount > 0 ? `(${pendingCount} pending)` : ''}
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-red-950/60 border border-red-500/40 text-red-300">
+                <WifiOff className="h-3 w-3 text-red-400" />
+                Offline ({pendingCount} pending)
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex bg-slate-900 border border-slate-850 p-1 rounded-xl">
           <button
