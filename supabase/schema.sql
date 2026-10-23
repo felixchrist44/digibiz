@@ -149,14 +149,38 @@ on conflict (id) do nothing;
 drop policy if exists "Allow public to read product images" on storage.objects;
 create policy "Allow public to read product images" on storage.objects for select to public using (bucket_id = 'product-images');
 
-drop policy if exists "Allow authenticated users to upload product images" on storage.objects;
-create policy "Allow authenticated users to upload product images" on storage.objects for insert to authenticated with check (bucket_id = 'product-images');
+-- Tenant-scoped write policies: keep in sync with supabase/storage_tenant_isolation.sql (#3)
+DROP POLICY IF EXISTS "Allow authenticated users to upload product images" ON storage.objects;
+DROP POLICY IF EXISTS "Allow authenticated users to update product images" ON storage.objects;
+DROP POLICY IF EXISTS "Allow authenticated users to delete product images" ON storage.objects;
+DROP POLICY IF EXISTS "product_images_tenant_insert" ON storage.objects;
+DROP POLICY IF EXISTS "product_images_tenant_update" ON storage.objects;
+DROP POLICY IF EXISTS "product_images_tenant_delete" ON storage.objects;
 
-drop policy if exists "Allow authenticated users to update product images" on storage.objects;
-create policy "Allow authenticated users to update product images" on storage.objects for update to authenticated using (bucket_id = 'product-images');
+CREATE POLICY "product_images_tenant_insert" ON storage.objects
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    bucket_id = 'product-images'
+    AND (storage.foldername(name))[1] = (auth.jwt() -> 'app_metadata' ->> 'tenant_id')
+  );
 
-drop policy if exists "Allow authenticated users to delete product images" on storage.objects;
-create policy "Allow authenticated users to delete product images" on storage.objects for delete to authenticated using (bucket_id = 'product-images');
+CREATE POLICY "product_images_tenant_update" ON storage.objects
+  FOR UPDATE TO authenticated
+  USING (
+    bucket_id = 'product-images'
+    AND (storage.foldername(name))[1] = (auth.jwt() -> 'app_metadata' ->> 'tenant_id')
+  )
+  WITH CHECK (
+    bucket_id = 'product-images'
+    AND (storage.foldername(name))[1] = (auth.jwt() -> 'app_metadata' ->> 'tenant_id')
+  );
+
+CREATE POLICY "product_images_tenant_delete" ON storage.objects
+  FOR DELETE TO authenticated
+  USING (
+    bucket_id = 'product-images'
+    AND (storage.foldername(name))[1] = (auth.jwt() -> 'app_metadata' ->> 'tenant_id')
+  );
 
 -- 8. Add harga_modal to produk table (for existing databases)
 alter table public.produk add column if not exists harga_modal numeric(12,2) check (harga_modal >= 0);

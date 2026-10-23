@@ -42,5 +42,6 @@ next-env.d.ts
 
 # scratch directory (contains test credentials and scripts)
 /scratch/
-/tests/
+/tests/*
+!/tests/storage_isolation.test.js
 
